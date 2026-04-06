@@ -1,0 +1,66 @@
+#+title: ob-clutch
+
+Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] database client.
+
+* Supported block types
+
+- =mysql=
+- =postgresql=
+- =sqlite=
+- =clutch= (generic entry point)
+
+Generic =clutch= blocks can target JDBC backends such as Oracle or SQL Server
+with a =:backend= header argument.
+
+* Header arguments
+
+- =:connection=
+- =:backend=
+- =:host=
+- =:port=
+- =:user=
+- =:password=
+- =:database=
+- =:pass-entry=
+
+* Examples
+
+MySQL:
+
+#+begin_src org
+#+begin_src mysql :connection dev
+SELECT 1;
+#+end_src
+#+end_src
+
+PostgreSQL:
+
+#+begin_src org
+#+begin_src postgresql :host 127.0.0.1 :port 5432 :user postgres :database app
+SELECT now();
+#+end_src
+#+end_src
+
+SQLite:
+
+#+begin_src org
+#+begin_src sqlite :database /tmp/demo.db
+SELECT sqlite_version();
+#+end_src
+#+end_src
+
+Generic clutch/JDBC:
+
+#+begin_src org
+#+begin_src clutch :backend oracle :connection prod-oracle
+SELECT sysdate FROM dual
+#+end_src
+#+end_src
+
+* Installation
+
+=ob-clutch= depends on the =clutch= package.
+
+* License
+
+GPL-3.0-or-later
