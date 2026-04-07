@@ -14,6 +14,8 @@
 (require 'ert)
 (require 'ob-clutch)
 
+(defvar clutch-connection-alist)
+
 (ert-deftest ob-clutch-test-normalize-backend-aliases ()
   "Test backend alias normalization."
   (should (eq (ob-clutch--normalize-backend 'mysql) 'mysql))
@@ -62,7 +64,7 @@
     (should (= (plist-get conn-params :port) 3306))))
 
 (ert-deftest ob-clutch-test-resolve-connection-inline-pass-entry ()
-  "Test inline params preserve :pass-entry for password resolution."
+  "Test inline params preserve password lookup inputs."
   (let (resolved)
     (cl-letf (((symbol-function 'ob-clutch--resolve-password)
                (lambda (params)
@@ -76,6 +78,9 @@
                     'mysql)))
         (should (eq backend 'mysql))
         (should (equal (plist-get conn-params :password) "secret"))
+        (should (equal (plist-get resolved :host) "127.0.0.1"))
+        (should (equal (plist-get resolved :user) "u"))
+        (should (= (plist-get resolved :port) 3306))
         (should (equal (plist-get resolved :pass-entry) "db/dev"))))))
 
 (ert-deftest ob-clutch-test-resolve-connection-errors-early-for-unresolved-jdbc-pass-entry ()
@@ -93,6 +98,21 @@
       'oracle)
      :type 'user-error)))
 
+(ert-deftest ob-clutch-test-resolve-connection-preserves-inline-jdbc-sid ()
+  "Inline JDBC params should preserve driver-specific keys such as :sid."
+  (pcase-let ((`(,backend . ,conn-params)
+               (ob-clutch--resolve-connection
+                '((:backend . oracle)
+                  (:host . "db")
+                  (:port . "1521")
+                  (:user . "scott")
+                  (:sid . "ORCL"))
+                'oracle)))
+    (should (eq backend 'oracle))
+    (should (equal (plist-get conn-params :host) "db"))
+    (should (= (plist-get conn-params :port) 1521))
+    (should (equal (plist-get conn-params :sid) "ORCL"))))
+
 (ert-deftest ob-clutch-test-resolve-connection-inline-sqlite-requires-database ()
   "Test sqlite inline params require :database."
   (should-error
@@ -104,13 +124,13 @@
   ;; explicit
   (should (equal (ob-clutch--resolve-password '(:password "p1")) "p1"))
   ;; pass
-  (cl-letf (((symbol-function 'clutch-db--pass-secret-by-suffix)
+  (cl-letf (((symbol-function 'ob-clutch--pass-secret-by-suffix)
              (lambda (_suffix) "p2"))
             ((symbol-function 'auth-source-search)
              (lambda (&rest _args) nil)))
     (should (equal (ob-clutch--resolve-password '(:pass-entry "dev")) "p2")))
   ;; auth-source function secret
-  (cl-letf (((symbol-function 'clutch-db--pass-secret-by-suffix)
+  (cl-letf (((symbol-function 'ob-clutch--pass-secret-by-suffix)
              (lambda (_suffix) nil))
             ((symbol-function 'auth-source-search)
              (lambda (&rest _args)
@@ -195,5 +215,26 @@
    (org-babel-execute:clutch "select 1" nil)
    :type 'user-error))
 
-(provide 'ob-clutch-test)
+(ert-deftest ob-clutch-test-max-rows-truncates-table-results ()
+  "Table results should respect the :max-rows header."
+  (let ((ob-clutch--connection-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'clutch-db-live-p)
+               (lambda (_conn) nil))
+              ((symbol-function 'clutch-db-connect)
+               (lambda (_backend _params)
+                 'fake-conn))
+              ((symbol-function 'org-babel-expand-body:generic)
+               (lambda (body _params) body))
+              ((symbol-function 'clutch-db-query)
+               (lambda (_conn _sql)
+                 (make-clutch-db-result
+                  :columns '((:name "id"))
+                  :rows '((1) (2) (3))
+                  :affected-rows nil))))
+      (should (equal (org-babel-execute:mysql
+                      "select id from demo"
+                      '((:host . "127.0.0.1")
+                        (:user . "root")
+                        (:max-rows . "2")))
+                     '(("id") hline (1) (2)))))))
 ;;; ob-clutch-test.el ends here

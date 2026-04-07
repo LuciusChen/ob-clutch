@@ -2,6 +2,25 @@
 
 Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] database client.
 
+* Installation
+
+=ob-clutch= depends on the =clutch= package:
+
+#+begin_src emacs-lisp
+(use-package clutch)
+(use-package ob-clutch
+  :after clutch)
+#+end_src
+
+For native backends, installing =clutch= is enough.  Its package metadata pulls
+in =mysql= and =pg= transitively.
+
+Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s JDBC bridge as well:
+
+#+begin_src emacs-lisp
+(require 'clutch-db-jdbc)
+#+end_src
+
 * Supported block types
 
 - =mysql=
@@ -11,6 +30,21 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
 
 Generic =clutch= blocks can target JDBC backends such as Oracle or SQL Server
 with a =:backend= header argument.
+
+* Saved connections and passwords
+
+=:connection= resolves entries from =clutch-connection-alist=.  Saved
+connections without an explicit =:backend= follow clutch's default and use
+=mysql=.
+
+Password resolution follows clutch's connection rules:
+
+1. =:password=
+2. =:pass-entry= via =auth-source-pass=
+3. =auth-source-search= via =:host= / =:user= / =:port=
+
+When a saved connection omits =:pass-entry=, =ob-clutch= defaults it to the
+connection name so pass entries like =mysql/dev= can still match =dev=.
 
 * Header arguments
 
@@ -22,6 +56,17 @@ with a =:backend= header argument.
 - =:password=
 - =:database=
 - =:pass-entry=
+- =:max-rows=
+
+Backend-specific headers are passed through when relevant:
+
+- PostgreSQL: =:schema=, =:tls=, =:sslmode=, =:query-timeout=
+- MySQL: =:tls=, =:ssl-mode=
+- JDBC: =:url=, =:sid=, =:catalog=, =:manual-commit=, =:rpc-timeout=
+
+=:max-rows= truncates data rows after the query returns.  The default is
+unlimited; customize =org-babel-clutch-max-rows= or set =:max-rows= per block.
+Use =:max-rows nil= to force unlimited output for a single block.
 
 * Examples
 
@@ -36,7 +81,7 @@ SELECT 1;
 PostgreSQL:
 
 #+begin_src org
-#+begin_src postgresql :host 127.0.0.1 :port 5432 :user postgres :database app
+#+begin_src postgresql :host 127.0.0.1 :port 5432 :user postgres :database app :schema public :max-rows 20
 SELECT now();
 #+end_src
 #+end_src
@@ -57,9 +102,13 @@ SELECT sysdate FROM dual
 #+end_src
 #+end_src
 
-* Installation
+Inline JDBC:
 
-=ob-clutch= depends on the =clutch= package.
+#+begin_src org
+#+begin_src clutch :backend oracle :host db.example.com :port 1521 :user scott :sid ORCL
+SELECT sysdate FROM dual
+#+end_src
+#+end_src
 
 * License
 
