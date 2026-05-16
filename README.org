@@ -46,6 +46,11 @@ Password resolution follows clutch's connection rules:
 When a saved connection omits =:pass-entry=, =ob-clutch= defaults it to the
 connection name so pass entries like =mysql/dev= can still match =dev=.
 
+Saved connections and inline headers also honor Clutch transport keys:
+=:ssh-host=, =:tramp=, and the longer =:tramp-default-directory= spelling.
+When a block is executed from a TRAMP org buffer and no explicit transport is
+configured, =ob-clutch= applies =clutch-tramp-context-policy= before connecting.
+
 * Header arguments
 
 - =:connection=
@@ -56,6 +61,8 @@ connection name so pass entries like =mysql/dev= can still match =dev=.
 - =:password=
 - =:database=
 - =:pass-entry=
+- =:ssh-host=
+- =:tramp=
 - =:max-rows=
 
 Backend-specific headers are passed through when relevant:

@@ -42,6 +42,7 @@
 ;;   :connection                name from `clutch-connection-alist'
 ;;   :backend                   mysql|pg|postgresql|sqlite|oracle|sqlserver|...
 ;;   :host :port :user :password :database
+;;   :ssh-host :tramp
 ;;
 ;; JDBC backends (oracle, sqlserver, db2, snowflake, redshift) require
 ;; clutch-db-jdbc.el to be loaded and clutch-jdbc-agent.jar to be available.
@@ -52,12 +53,9 @@
 ;;; Code:
 
 (require 'ob)
-(require 'auth-source)
 (require 'cl-lib)
+(require 'clutch)
 (require 'clutch-db)
-
-(declare-function auth-source-pass-entries "auth-source-pass" ())
-(declare-function auth-source-pass-parse-entry "auth-source-pass" (entry))
 
 (defvar clutch-connection-alist)
 
@@ -95,6 +93,9 @@ Nil means unlimited.  A source block can override this with the
     (password . :any)
     (database . :any)
     (pass-entry . :any)
+    (ssh-host . :any)
+    (tramp . :any)
+    (tramp-default-directory . :any)
     (url . :any)
     (sid . :any)
     (schema . :any)
@@ -113,13 +114,9 @@ Nil means unlimited.  A source block can override this with the
 (defvar ob-clutch--connection-cache (make-hash-table :test 'equal)
   "Cache of live DB connections keyed by backend+connection parameters.")
 
-(defconst ob-clutch--meta-keys
-  '(:backend :sql-product :pass-entry)
-  "Connection plist keys not passed to backend connect functions.")
-
-(defconst ob-clutch--jdbc-backends
-  '(oracle oracle-8 oracle-11 sqlserver db2 snowflake redshift clickhouse)
-  "Backend symbols handled by `clutch-db-jdbc'.")
+(defconst ob-clutch--transport-inline-param-keys
+  '(:ssh-host :tramp :tramp-default-directory)
+  "Transport keys accepted by inline Org-Babel connection params.")
 
 (defconst ob-clutch--mysql-inline-param-keys
   '(:host :port :user :password :database :tls :ssl-mode
@@ -148,19 +145,6 @@ Nil means unlimited.  A source block can override this with the
 (defconst ob-clutch--boolean-header-keys
   '(:tls :manual-commit)
   "Header arguments that should be coerced to booleans.")
-
-(defun ob-clutch--pass-secret-by-suffix (suffix)
-  "Return pass secret from the first entry whose path ends with SUFFIX.
-Matches, for example, `dev-mysql' against `mysql/dev-mysql'.  Returns
-nil when no matching entry is found or auth-source-pass is absent."
-  (when (and (fboundp 'auth-source-pass-entries)
-             (fboundp 'auth-source-pass-parse-entry))
-    (let* ((re (format "\\(^\\|/\\)%s$" (regexp-quote suffix)))
-           (entry (cl-find-if (lambda (candidate)
-                                (string-match-p re candidate))
-                              (auth-source-pass-entries))))
-      (when entry
-        (cdr (assq 'secret (auth-source-pass-parse-entry entry)))))))
 
 (defun ob-clutch--parse-natnum (value key)
   "Return VALUE parsed as a natural number for header KEY."
@@ -196,11 +180,13 @@ nil when no matching entry is found or auth-source-pass is absent."
 
 (defun ob-clutch--inline-param-keys (backend)
   "Return supported inline connection keys for BACKEND."
-  (pcase backend
-    ('mysql ob-clutch--mysql-inline-param-keys)
-    ('pg ob-clutch--pg-inline-param-keys)
-    ('sqlite ob-clutch--sqlite-inline-param-keys)
-    (_ ob-clutch--jdbc-inline-param-keys)))
+  (append
+   (pcase backend
+     ('mysql ob-clutch--mysql-inline-param-keys)
+     ('pg ob-clutch--pg-inline-param-keys)
+     ('sqlite ob-clutch--sqlite-inline-param-keys)
+     (_ ob-clutch--jdbc-inline-param-keys))
+   ob-clutch--transport-inline-param-keys))
 
 (defun ob-clutch--params-alist-to-plist (params keys)
   "Return Babel PARAMS as a plist containing only KEYS."
@@ -232,32 +218,10 @@ When truncation happens, emit a message describing the number of hidden rows."
         rows)
     rows))
 
-(defun ob-clutch--resolve-password (params)
-  "Resolve password for PARAMS via :password, pass, then auth-source."
-  (let ((pw (plist-get params :password))
-        (entry (plist-get params :pass-entry)))
-    (cond
-     ((and (stringp pw) (> (length pw) 0)) pw)
-     (t
-      (or (and entry (ob-clutch--pass-secret-by-suffix entry))
-          (when-let* ((found (car (auth-source-search
-                                   :host (plist-get params :host)
-                                   :user (plist-get params :user)
-                                   :port (plist-get params :port)
-                                   :max 1)))
-                      (secret (plist-get found :secret)))
-            (if (functionp secret) (funcall secret) secret)))))))
-
-(defun ob-clutch--inject-entry-name (params name)
-  "Return PARAMS with :pass-entry defaulting to NAME when needed."
-  (if (or (plist-get params :password) (plist-get params :pass-entry))
-      params
-    (append params (list :pass-entry name))))
-
 (defun ob-clutch--normalize-backend (backend)
-  "Normalize BACKEND string or symbol for `clutch-db-connect'.
+  "Normalize BACKEND string or symbol for `clutch-open-connection'.
 Pure Elisp backends are canonicalized (mysql/pg/sqlite).
-Any other symbol is passed through as-is; `clutch-db-connect' will signal
+Any other symbol is passed through as-is; `clutch-open-connection' will signal
 an error if the backend is truly unknown.  This allows JDBC driver symbols
 such as oracle, sqlserver, db2, snowflake, and redshift to work without
 ob-clutch needing to know about clutch-db-jdbc."
@@ -269,16 +233,6 @@ ob-clutch needing to know about clutch-db-jdbc."
       ((or 'pg 'postgres 'postgresql) 'pg)
       ('sqlite 'sqlite)
       (_ sym))))
-
-(defun ob-clutch--plist-without-meta (plist)
-  "Return copy of PLIST excluding keys in `ob-clutch--meta-keys'."
-  (let (out)
-    (while plist
-      (let ((k (pop plist))
-            (v (pop plist)))
-        (unless (memq k ob-clutch--meta-keys)
-          (setq out (append out (list k v))))))
-    out))
 
 (defun ob-clutch--inline-params (params backend)
   "Build inline connection params from Babel PARAMS for BACKEND."
@@ -307,68 +261,41 @@ ob-clutch needing to know about clutch-db-jdbc."
             (setq conn-params (plist-put conn-params :port 5432)))))
        conn-params))))
 
-(defun ob-clutch--maybe-inject-password (backend conn-params source-params)
-  "Return CONN-PARAMS with password injected unless BACKEND is sqlite.
-SOURCE-PARAMS is the plist used for password resolution."
-  (if (eq backend 'sqlite)
-      conn-params
-    (if-let* ((pw (ob-clutch--resolve-password source-params)))
-        (plist-put conn-params :password pw)
-      conn-params)))
-
-(defun ob-clutch--guard-jdbc-pass-entry (backend source-params conn-params)
-  "Fail early when JDBC BACKEND has an unresolved explicit :pass-entry.
-Return CONN-PARAMS unchanged otherwise when SOURCE-PARAMS already
-resolved a password."
-  (when (and (memq backend ob-clutch--jdbc-backends)
-             (plist-get source-params :pass-entry)
-             (null (plist-get conn-params :password)))
-    (user-error
-     (concat "No password resolved for JDBC Org-Babel block %s (:pass-entry %s). "
-             "Enable auth-source-pass/auth-source, or set :password explicitly")
-     backend
-     (plist-get source-params :pass-entry)))
-  conn-params)
-
 (defun ob-clutch--resolve-connection (params default-backend)
-  "Return (BACKEND . CONN-PARAMS) from Babel PARAMS.
+  "Return a Clutch connection plist from Babel PARAMS.
 DEFAULT-BACKEND is used by language-specific executors."
-    (if-let* ((conn-name (cdr (assq :connection params))))
+  (if-let* ((conn-name (cdr (assq :connection params))))
       (let* ((entry (or (assoc conn-name clutch-connection-alist)
                         (user-error "Unknown connection: %s" conn-name)))
              (plist (copy-sequence (cdr entry)))
-             (plist (ob-clutch--inject-entry-name plist conn-name))
+             (plist (if (or (plist-get plist :password)
+                            (plist-get plist :pass-entry))
+                        plist
+                      (append plist (list :pass-entry conn-name))))
              (backend (ob-clutch--normalize-backend
-                       (or (plist-get plist :backend) default-backend 'mysql)))
-             (conn-params (ob-clutch--plist-without-meta plist)))
-        (cons backend
-              (ob-clutch--guard-jdbc-pass-entry
-               backend plist
-               (ob-clutch--maybe-inject-password backend conn-params plist))))
+                       (or (plist-get plist :backend) default-backend 'mysql))))
+        (plist-put plist :backend backend))
     (let* ((backend-sym (or (cdr (assq :backend params)) default-backend))
            (backend (or (and backend-sym
                              (ob-clutch--normalize-backend backend-sym))
                         (user-error
                          "Missing :backend for clutch block (or use :connection to reference a saved connection)")))
-           (conn-params (ob-clutch--inline-params params backend))
-           (source-params (copy-sequence conn-params))
-           (source-params (if-let* ((pass-entry (cdr (assq :pass-entry params))))
-                              (plist-put source-params :pass-entry pass-entry)
-                            source-params)))
-      (cons backend
-            (ob-clutch--guard-jdbc-pass-entry
-             backend source-params
-             (ob-clutch--maybe-inject-password backend conn-params source-params))))))
+           (conn-params (ob-clutch--inline-params params backend)))
+      (when-let* ((pass-entry (cdr (assq :pass-entry params))))
+        (setq conn-params (plist-put conn-params :pass-entry pass-entry)))
+      (plist-put conn-params :backend backend))))
 
 (defun ob-clutch--connect (params default-backend)
   "Get or create a cached `clutch-db' connection for PARAMS using DEFAULT-BACKEND."
-  (pcase-let* ((`(,backend . ,conn-params)
-                (ob-clutch--resolve-connection params default-backend))
-               (key (format "%S:%S" backend conn-params))
-               (cached (gethash key ob-clutch--connection-cache)))
+  (let* ((conn-params (ob-clutch--resolve-connection params default-backend))
+         (source-origin (file-remote-p default-directory))
+         (key (format "%S:%S" conn-params source-origin))
+         (cached (gethash key ob-clutch--connection-cache)))
     (if (and cached (clutch-db-live-p cached))
         cached
-      (let ((conn (clutch-db-connect backend conn-params)))
+      (let* ((prepared-params
+              (clutch-prepare-connection-params conn-params default-directory))
+             (conn (clutch-open-connection prepared-params)))
         (puthash key conn ob-clutch--connection-cache)
         conn))))
 
