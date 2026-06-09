@@ -55,7 +55,7 @@
 (require 'ob)
 (require 'cl-lib)
 (require 'clutch)
-(require 'clutch-db)
+(require 'clutch-backend)
 
 (defvar clutch-connection-alist)
 
