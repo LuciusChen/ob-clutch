@@ -259,6 +259,31 @@
                         (:max-rows . "2")))
                      '(("id") hline (1) (2)))))))
 
+(ert-deftest ob-clutch-test-max-rows-uses-custom-default ()
+  "Table results should respect `ob-clutch-max-rows' when no header is set."
+  (let ((ob-clutch--connection-cache (make-hash-table :test 'equal))
+        (ob-clutch-max-rows 1))
+    (cl-letf (((symbol-function 'clutch-db-live-p)
+               (lambda (_conn) nil))
+              ((symbol-function 'clutch-prepare-connection-params)
+               (lambda (params _source-default-directory) params))
+              ((symbol-function 'clutch-open-connection)
+               (lambda (_params)
+                 'fake-conn))
+              ((symbol-function 'org-babel-expand-body:generic)
+               (lambda (body _params) body))
+              ((symbol-function 'clutch-db-query)
+               (lambda (_conn _sql)
+                 (make-clutch-db-result
+                  :columns '((:name "id"))
+                  :rows '((1) (2))
+                  :affected-rows nil))))
+      (should (equal (org-babel-execute:mysql
+                      "select id from demo"
+                      '((:host . "127.0.0.1")
+                        (:user . "root")))
+                     '(("id") hline (1)))))))
+
 (ert-deftest ob-clutch-test-mongodb-and-redis-executors-use-default-backends ()
   "Language-specific executors should supply MongoDB and Redis defaults."
   (let ((ob-clutch--connection-cache (make-hash-table :test 'equal))

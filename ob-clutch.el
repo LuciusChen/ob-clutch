@@ -63,18 +63,18 @@
 
 (defvar clutch-connection-alist)
 
-(defgroup org-babel-clutch nil
+(defgroup ob-clutch nil
   "Org-Babel integration for clutch database backends."
   :group 'org-babel
-  :prefix "org-babel-clutch-")
+  :prefix "ob-clutch-")
 
-(defcustom org-babel-clutch-max-rows nil
+(defcustom ob-clutch-max-rows nil
   "Default maximum number of data rows returned by `ob-clutch'.
 Nil means unlimited.  A source block can override this with the
 `:max-rows' header argument."
   :type '(choice (const :tag "Unlimited" nil)
                  (natnum :tag "Rows"))
-  :group 'org-babel-clutch)
+  :group 'ob-clutch)
 
 (defvar org-babel-default-header-args:clutch '((:results . "table"))
   "Default header arguments for clutch source blocks.")
@@ -231,7 +231,7 @@ Nil means unlimited.  A source block can override this with the
   "Return the effective :max-rows limit for Babel PARAMS."
   (let ((value (cdr (assq :max-rows params))))
     (cond
-     ((null value) org-babel-clutch-max-rows)
+     ((null value) ob-clutch-max-rows)
      ((and (stringp value) (string= (downcase value) "nil")) nil)
      (t (ob-clutch--parse-natnum value :max-rows)))))
 

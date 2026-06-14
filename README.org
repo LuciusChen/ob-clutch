@@ -79,7 +79,7 @@ Backend-specific headers are passed through when relevant:
 - Redis: =:user=, =:password=, =:database=
 
 =:max-rows= truncates data rows after the query returns.  The default is
-unlimited; customize =org-babel-clutch-max-rows= or set =:max-rows= per block.
+unlimited; customize =ob-clutch-max-rows= or set =:max-rows= per block.
 Use =:max-rows nil= to force unlimited output for a single block.
 
 * Examples
