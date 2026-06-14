@@ -59,13 +59,13 @@
       (should (eq (plist-get conn-params :backend) 'mysql))
       (should (equal (plist-get conn-params :host) "127.0.0.1")))))
 
-(ert-deftest ob-clutch-test-resolve-connection-inline-default-port ()
-  "Test inline mysql connection defaults to port 3306."
+(ert-deftest ob-clutch-test-resolve-connection-inline-defers-backend-defaults ()
+  "Inline params should not duplicate Clutch backend defaults."
   (let ((conn-params
          (ob-clutch--resolve-connection
           '((:host . "127.0.0.1") (:user . "u")) 'mysql)))
     (should (eq (plist-get conn-params :backend) 'mysql))
-    (should (= (plist-get conn-params :port) 3306))))
+    (should-not (plist-member conn-params :port))))
 
 (ert-deftest ob-clutch-test-resolve-connection-inline-pass-entry ()
   "Test inline params preserve :pass-entry for Clutch core resolution."
@@ -78,7 +78,6 @@
     (should (eq (plist-get conn-params :backend) 'mysql))
     (should (equal (plist-get conn-params :host) "127.0.0.1"))
     (should (equal (plist-get conn-params :user) "u"))
-    (should (= (plist-get conn-params :port) 3306))
     (should (equal (plist-get conn-params :pass-entry) "db/dev"))))
 
 (ert-deftest ob-clutch-test-resolve-connection-preserves-inline-jdbc-sid ()
@@ -146,11 +145,11 @@
       (should (equal (plist-get saved :tramp) "/ssh:arch:/work/"))
       (should (equal (plist-get inline :ssh-host) "bastion")))))
 
-(ert-deftest ob-clutch-test-resolve-connection-inline-sqlite-requires-database ()
-  "Test sqlite inline params require :database."
-  (should-error
-   (ob-clutch--resolve-connection '() 'sqlite)
-   :type 'user-error))
+(ert-deftest ob-clutch-test-resolve-connection-inline-sqlite-defers-database-validation ()
+  "SQLite database validation belongs to the Clutch adapter path."
+  (let ((conn-params (ob-clutch--resolve-connection '() 'sqlite)))
+    (should (eq (plist-get conn-params :backend) 'sqlite))
+    (should-not (plist-member conn-params :database))))
 
 (ert-deftest ob-clutch-test-connect-caches-live-connection ()
   "Test `ob-clutch--connect' reuses live cached connections."

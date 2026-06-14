@@ -131,40 +131,6 @@ Nil means unlimited.  A source block can override this with the
 (defvar ob-clutch--connection-cache (make-hash-table :test 'equal)
   "Cache of live DB connections keyed by backend+connection parameters.")
 
-(defconst ob-clutch--transport-inline-param-keys
-  '(:ssh-host :tramp :tramp-default-directory)
-  "Transport keys accepted by inline Org-Babel connection params.")
-
-(defconst ob-clutch--mysql-inline-param-keys
-  '(:host :port :user :password :database :tls :ssl-mode
-    :connect-timeout :read-idle-timeout)
-  "Supported inline mysql connection keys.")
-
-(defconst ob-clutch--pg-inline-param-keys
-  '(:host :port :user :password :database :schema :tls :sslmode
-    :connect-timeout :read-idle-timeout :query-timeout)
-  "Supported inline PostgreSQL connection keys.")
-
-(defconst ob-clutch--sqlite-inline-param-keys
-  '(:database)
-  "Supported inline SQLite connection keys.")
-
-(defconst ob-clutch--jdbc-inline-param-keys
-  '(:host :port :user :password :database :url :sid :schema :catalog
-    :manual-commit :connect-timeout :read-idle-timeout :query-timeout
-    :rpc-timeout)
-  "Supported inline JDBC connection keys.")
-
-(defconst ob-clutch--mongodb-inline-param-keys
-  '(:url :host :port :user :password :database :surface :auth-source
-    :auth-database :auth-mechanism :props :tls :ssl :tls-verify
-    :connect-timeout :read-idle-timeout :query-timeout :rpc-timeout)
-  "Supported inline MongoDB connection keys.")
-
-(defconst ob-clutch--redis-inline-param-keys
-  '(:host :port :user :password :database)
-  "Supported inline Redis connection keys.")
-
 (defconst ob-clutch--numeric-header-keys
   '(:port :connect-timeout :read-idle-timeout :query-timeout :rpc-timeout)
   "Header arguments that should be coerced to natural numbers.")
@@ -205,17 +171,12 @@ Nil means unlimited.  A source block can override this with the
     (ob-clutch--parse-boolean value key))
    (t value)))
 
-(defun ob-clutch--inline-param-keys (backend)
-  "Return supported inline connection keys for BACKEND."
-  (append
-   (pcase backend
-     ('mysql ob-clutch--mysql-inline-param-keys)
-     ('pg ob-clutch--pg-inline-param-keys)
-     ('sqlite ob-clutch--sqlite-inline-param-keys)
-     ('mongodb ob-clutch--mongodb-inline-param-keys)
-     ('redis ob-clutch--redis-inline-param-keys)
-     (_ ob-clutch--jdbc-inline-param-keys))
-   ob-clutch--transport-inline-param-keys))
+(defun ob-clutch--connection-header-keys ()
+  "Return Org header keys that represent Clutch connection params."
+  (cl-loop for (name . _type) in org-babel-header-args:clutch
+           for key = (intern (concat ":" (symbol-name name)))
+           unless (memq key '(:connection :max-rows))
+           collect key))
 
 (defun ob-clutch--params-alist-to-plist (params keys)
   "Return Babel PARAMS as a plist containing only KEYS."
@@ -249,62 +210,22 @@ When truncation happens, emit a message describing the number of hidden rows."
 
 (defun ob-clutch--normalize-backend (backend)
   "Normalize BACKEND string or symbol for `clutch-open-connection'.
-Pure Elisp backends are canonicalized (mysql/pg/sqlite).
-Any other symbol is passed through as-is; `clutch-open-connection' will signal
-an error if the backend is truly unknown.  This allows JDBC driver symbols
-such as oracle, sqlserver, db2, snowflake, and redshift to work without
-ob-clutch needing to know about clutch-db-jdbc."
-  (let ((sym (if (stringp backend)
-                 (intern (downcase backend))
-               backend)))
-    (pcase sym
-      ((or 'mysql 'mariadb) 'mysql)
-      ((or 'pg 'postgres 'postgresql) 'pg)
-      ('sqlite 'sqlite)
-      ((or 'mongo 'mongodb) 'mongodb)
-      ('redis 'redis)
-      (_ sym))))
+Alias ownership lives in Clutch's backend registry."
+  (clutch-backend-normalize backend))
 
 (defun ob-clutch--inline-params (params backend)
   "Build inline connection params from Babel PARAMS for BACKEND."
-  (let ((conn-params (ob-clutch--params-alist-to-plist
-                      params (ob-clutch--inline-param-keys backend))))
-    (pcase backend
-      ('sqlite
-       (unless (plist-get conn-params :database)
-         (user-error "Missing :database for sqlite block"))
-       conn-params)
-      ((or 'mongodb 'redis)
-       conn-params)
-      (_
-       (unless (plist-get conn-params :user)
-         (user-error "Missing :user (or use :connection)"))
-       (unless (or (plist-get conn-params :url)
-                   (plist-get conn-params :host))
-         (pcase backend
-           ('mysql
-            (setq conn-params (plist-put conn-params :host "127.0.0.1")))
-           ('pg
-            (setq conn-params (plist-put conn-params :host "127.0.0.1")))))
-       (unless (plist-get conn-params :port)
-         (pcase backend
-           ('mysql
-            (setq conn-params (plist-put conn-params :port 3306)))
-           ('pg
-            (setq conn-params (plist-put conn-params :port 5432)))))
-       conn-params))))
+  (plist-put
+   (ob-clutch--params-alist-to-plist
+    params (ob-clutch--connection-header-keys))
+   :backend backend))
 
 (defun ob-clutch--resolve-connection (params default-backend)
   "Return a Clutch connection plist from Babel PARAMS.
 DEFAULT-BACKEND is used by language-specific executors."
   (if-let* ((conn-name (cdr (assq :connection params))))
-      (let* ((entry (or (assoc conn-name clutch-connection-alist)
+      (let* ((plist (or (clutch-saved-connection-params conn-name)
                         (user-error "Unknown connection: %s" conn-name)))
-             (plist (copy-sequence (cdr entry)))
-             (plist (if (or (plist-get plist :password)
-                            (plist-get plist :pass-entry))
-                        plist
-                      (append plist (list :pass-entry conn-name))))
              (backend (ob-clutch--normalize-backend
                        (or (plist-get plist :backend) default-backend 'mysql))))
         (plist-put plist :backend backend))
