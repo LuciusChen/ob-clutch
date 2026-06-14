@@ -12,8 +12,10 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
   :after clutch)
 #+end_src
 
-For native backends, installing =clutch= is enough.  Its package metadata pulls
-in =mysql= and =pg= transitively.
+For native SQL backends, installing =clutch= is enough.  Its package metadata
+pulls in =mysql= and =pg= transitively.  MongoDB and Redis require the optional
+protocol packages used by clutch itself: =mongodb.el= for =:backend mongodb=,
+and =redis.el= for =:backend redis=.
 
 Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s JDBC bridge as well:
 
@@ -26,10 +28,12 @@ Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s J
 - =mysql=
 - =postgresql=
 - =sqlite=
+- =mongodb=
+- =redis=
 - =clutch= (generic entry point)
 
-Generic =clutch= blocks can target JDBC backends such as Oracle or SQL Server
-with a =:backend= header argument.
+Generic =clutch= blocks can target any clutch backend with a =:backend= header
+argument, including JDBC backends such as Oracle or SQL Server.
 
 * Saved connections and passwords
 
@@ -70,6 +74,9 @@ Backend-specific headers are passed through when relevant:
 - PostgreSQL: =:schema=, =:tls=, =:sslmode=, =:query-timeout=
 - MySQL: =:tls=, =:ssl-mode=
 - JDBC: =:url=, =:sid=, =:catalog=, =:manual-commit=, =:rpc-timeout=
+- MongoDB: =:url=, =:surface=, =:auth-source=, =:auth-database=,
+  =:auth-mechanism=, =:props=, =:tls=, =:ssl=, =:tls-verify=
+- Redis: =:user=, =:password=, =:database=
 
 =:max-rows= truncates data rows after the query returns.  The default is
 unlimited; customize =org-babel-clutch-max-rows= or set =:max-rows= per block.
@@ -98,6 +105,22 @@ SQLite:
 #+begin_src org
 #+begin_src sqlite :database /tmp/demo.db
 SELECT sqlite_version();
+#+end_src
+#+end_src
+
+MongoDB:
+
+#+begin_src org
+#+begin_src mongodb :host 127.0.0.1 :port 27017 :database app
+db.users.find({active: true}).limit(5)
+#+end_src
+#+end_src
+
+Redis:
+
+#+begin_src org
+#+begin_src redis :host 127.0.0.1 :port 6379 :database 0
+GET message
 #+end_src
 #+end_src
 

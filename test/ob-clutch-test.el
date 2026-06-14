@@ -22,7 +22,17 @@
   (should (eq (ob-clutch--normalize-backend 'mariadb) 'mysql))
   (should (eq (ob-clutch--normalize-backend 'postgresql) 'pg))
   (should (eq (ob-clutch--normalize-backend "POSTGRES") 'pg))
-  (should (eq (ob-clutch--normalize-backend 'sqlite) 'sqlite)))
+  (should (eq (ob-clutch--normalize-backend 'sqlite) 'sqlite))
+  (should (eq (ob-clutch--normalize-backend 'mongodb) 'mongodb))
+  (should (eq (ob-clutch--normalize-backend 'mongo) 'mongodb))
+  (should (eq (ob-clutch--normalize-backend "Redis") 'redis)))
+
+(ert-deftest ob-clutch-test-language-shims-load ()
+  "MongoDB and Redis language shims should load the shared implementation."
+  (should (require 'ob-mongodb nil t))
+  (should (require 'ob-redis nil t))
+  (should (fboundp 'org-babel-execute:mongodb))
+  (should (fboundp 'org-babel-execute:redis)))
 
 (ert-deftest ob-clutch-test-resolve-connection-unknown-name-errors ()
   "Test unknown :connection raises explicit user error."
@@ -85,6 +95,39 @@
     (should (equal (plist-get conn-params :host) "db"))
     (should (= (plist-get conn-params :port) 1521))
     (should (equal (plist-get conn-params :sid) "ORCL"))))
+
+(ert-deftest ob-clutch-test-resolve-connection-mongodb-inline-no-auth ()
+  "Inline MongoDB params should not require SQL-style user auth."
+  (let ((conn-params
+         (ob-clutch--resolve-connection
+          '((:backend . mongodb)
+            (:host . "127.0.0.1")
+            (:port . "27017")
+            (:database . "app")
+            (:surface . "sql-interface")
+            (:auth-source . "admin"))
+          nil)))
+    (should (eq (plist-get conn-params :backend) 'mongodb))
+    (should (equal (plist-get conn-params :host) "127.0.0.1"))
+    (should (= (plist-get conn-params :port) 27017))
+    (should (equal (plist-get conn-params :database) "app"))
+    (should (equal (plist-get conn-params :surface) "sql-interface"))
+    (should (equal (plist-get conn-params :auth-source) "admin"))
+    (should-not (plist-member conn-params :user))))
+
+(ert-deftest ob-clutch-test-resolve-connection-redis-inline-no-auth ()
+  "Inline Redis params should not require SQL-style user auth."
+  (let ((conn-params
+         (ob-clutch--resolve-connection
+          '((:host . "192.168.1.224")
+            (:port . "6379")
+            (:database . "0"))
+          'redis)))
+    (should (eq (plist-get conn-params :backend) 'redis))
+    (should (equal (plist-get conn-params :host) "192.168.1.224"))
+    (should (= (plist-get conn-params :port) 6379))
+    (should (equal (plist-get conn-params :database) "0"))
+    (should-not (plist-member conn-params :user))))
 
 (ert-deftest ob-clutch-test-resolve-connection-preserves-transport-params ()
   "Saved and inline connection params should keep Clutch transport keys."
@@ -215,4 +258,40 @@
                         (:user . "root")
                         (:max-rows . "2")))
                      '(("id") hline (1) (2)))))))
+
+(ert-deftest ob-clutch-test-mongodb-and-redis-executors-use-default-backends ()
+  "Language-specific executors should supply MongoDB and Redis defaults."
+  (let ((ob-clutch--connection-cache (make-hash-table :test 'equal))
+        opened
+        queries)
+    (cl-letf (((symbol-function 'clutch-db-live-p)
+               (lambda (_conn) nil))
+              ((symbol-function 'clutch-prepare-connection-params)
+               (lambda (params _source-default-directory) params))
+              ((symbol-function 'clutch-open-connection)
+               (lambda (params)
+                 (push params opened)
+                 (list :backend (plist-get params :backend))))
+              ((symbol-function 'org-babel-expand-body:generic)
+               (lambda (body _params) body))
+              ((symbol-function 'clutch-db-query)
+               (lambda (conn command)
+                 (push (list (plist-get conn :backend) command) queries)
+                 (make-clutch-db-result :columns nil :rows nil :affected-rows 1))))
+      (should (equal (org-babel-execute:mongodb
+                      "db.users.find({active: true})"
+                      '((:database . "app")))
+                     "Affected rows: 1"))
+      (should (equal (org-babel-execute:redis "PING" nil)
+                     "Affected rows: 1"))
+      (setq opened (nreverse opened)
+            queries (nreverse queries))
+      (should (eq (plist-get (car opened) :backend) 'mongodb))
+      (should (equal (plist-get (car opened) :database) "app"))
+      (should-not (plist-member (car opened) :user))
+      (should (eq (plist-get (cadr opened) :backend) 'redis))
+      (should-not (plist-member (cadr opened) :user))
+      (should (equal queries
+                     '((mongodb "db.users.find({active: true})")
+                       (redis "PING")))))))
 ;;; ob-clutch-test.el ends here

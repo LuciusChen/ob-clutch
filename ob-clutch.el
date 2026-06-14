@@ -26,21 +26,25 @@
 
 ;;; Commentary:
 
-;; Org-Babel backend for MySQL/PostgreSQL/SQLite/JDBC databases via clutch-db.
+;; Org-Babel backend for clutch database connections.
 ;;
 ;; Supported block types:
 ;;   #+begin_src mysql
 ;;   #+begin_src postgresql
 ;;   #+begin_src sqlite
+;;   #+begin_src mongodb
+;;   #+begin_src redis
 ;;
-;; Optional generic block (supports all backends including JDBC):
+;; Optional generic block (supports all clutch backends including JDBC):
 ;;   #+begin_src clutch :backend pg
 ;;   #+begin_src clutch :backend oracle
 ;;   #+begin_src clutch :backend sqlserver
+;;   #+begin_src clutch :backend mongodb
+;;   #+begin_src clutch :backend redis
 ;;
 ;; Header arguments:
 ;;   :connection                name from `clutch-connection-alist'
-;;   :backend                   mysql|pg|postgresql|sqlite|oracle|sqlserver|...
+;;   :backend                   mysql|pg|postgresql|sqlite|mongodb|redis|...
 ;;   :host :port :user :password :database
 ;;   :ssh-host :tramp
 ;;
@@ -84,6 +88,12 @@ Nil means unlimited.  A source block can override this with the
 (defvar org-babel-default-header-args:sqlite '((:results . "table"))
   "Default header arguments for sqlite source blocks.")
 
+(defvar org-babel-default-header-args:mongodb '((:results . "table"))
+  "Default header arguments for mongodb source blocks.")
+
+(defvar org-babel-default-header-args:redis '((:results . "table"))
+  "Default header arguments for redis source blocks.")
+
 (defconst org-babel-header-args:clutch
   '((connection . :any)
     (backend . :any)
@@ -100,9 +110,16 @@ Nil means unlimited.  A source block can override this with the
     (sid . :any)
     (schema . :any)
     (catalog . :any)
+    (surface . :any)
+    (auth-source . :any)
+    (auth-database . :any)
+    (auth-mechanism . :any)
+    (props . :any)
     (tls . :any)
+    (ssl . :any)
     (ssl-mode . :any)
     (sslmode . :any)
+    (tls-verify . :any)
     (manual-commit . :any)
     (connect-timeout . :any)
     (read-idle-timeout . :any)
@@ -137,6 +154,16 @@ Nil means unlimited.  A source block can override this with the
     :manual-commit :connect-timeout :read-idle-timeout :query-timeout
     :rpc-timeout)
   "Supported inline JDBC connection keys.")
+
+(defconst ob-clutch--mongodb-inline-param-keys
+  '(:url :host :port :user :password :database :surface :auth-source
+    :auth-database :auth-mechanism :props :tls :ssl :tls-verify
+    :connect-timeout :read-idle-timeout :query-timeout :rpc-timeout)
+  "Supported inline MongoDB connection keys.")
+
+(defconst ob-clutch--redis-inline-param-keys
+  '(:host :port :user :password :database)
+  "Supported inline Redis connection keys.")
 
 (defconst ob-clutch--numeric-header-keys
   '(:port :connect-timeout :read-idle-timeout :query-timeout :rpc-timeout)
@@ -185,6 +212,8 @@ Nil means unlimited.  A source block can override this with the
      ('mysql ob-clutch--mysql-inline-param-keys)
      ('pg ob-clutch--pg-inline-param-keys)
      ('sqlite ob-clutch--sqlite-inline-param-keys)
+     ('mongodb ob-clutch--mongodb-inline-param-keys)
+     ('redis ob-clutch--redis-inline-param-keys)
      (_ ob-clutch--jdbc-inline-param-keys))
    ob-clutch--transport-inline-param-keys))
 
@@ -232,6 +261,8 @@ ob-clutch needing to know about clutch-db-jdbc."
       ((or 'mysql 'mariadb) 'mysql)
       ((or 'pg 'postgres 'postgresql) 'pg)
       ('sqlite 'sqlite)
+      ((or 'mongo 'mongodb) 'mongodb)
+      ('redis 'redis)
       (_ sym))))
 
 (defun ob-clutch--inline-params (params backend)
@@ -242,6 +273,8 @@ ob-clutch needing to know about clutch-db-jdbc."
       ('sqlite
        (unless (plist-get conn-params :database)
          (user-error "Missing :database for sqlite block"))
+       conn-params)
+      ((or 'mongodb 'redis)
        conn-params)
       (_
        (unless (plist-get conn-params :user)
@@ -343,6 +376,14 @@ DEFAULT-BACKEND is used by language-specific executors."
 (defun org-babel-execute:sqlite (body params)
   "Execute a SQLite BODY with Babel PARAMS."
   (ob-clutch--execute body params 'sqlite))
+
+(defun org-babel-execute:mongodb (body params)
+  "Execute a MongoDB BODY with Babel PARAMS."
+  (ob-clutch--execute body params 'mongodb))
+
+(defun org-babel-execute:redis (body params)
+  "Execute a Redis BODY with Babel PARAMS."
+  (ob-clutch--execute body params 'redis))
 
 ;;;; Cleanup on exit
 
