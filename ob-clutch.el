@@ -26,7 +26,7 @@
 
 ;;; Commentary:
 
-;; Org-Babel backend for MySQL/PostgreSQL/SQLite/JDBC databases via clutch-db.
+;; Org-Babel backend for MySQL/PostgreSQL/SQLite/JDBC databases via clutch.
 ;;
 ;; Supported block types:
 ;;   #+begin_src mysql
@@ -55,7 +55,7 @@
 (require 'ob)
 (require 'cl-lib)
 (require 'clutch)
-(require 'clutch-db)
+(require 'clutch-backend)
 
 (defvar clutch-connection-alist)
 
@@ -286,7 +286,7 @@ DEFAULT-BACKEND is used by language-specific executors."
       (plist-put conn-params :backend backend))))
 
 (defun ob-clutch--connect (params default-backend)
-  "Get or create a cached `clutch-db' connection for PARAMS using DEFAULT-BACKEND."
+  "Get or create a cached Clutch connection for PARAMS using DEFAULT-BACKEND."
   (let* ((conn-params (ob-clutch--resolve-connection params default-backend))
          (source-origin (file-remote-p default-directory))
          (key (format "%S:%S" conn-params source-origin))
