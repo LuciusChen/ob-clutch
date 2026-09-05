@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  elisp:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        emacs-version: ["29.1", "30.2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs-version }}
+      - name: Install Clutch and required dependencies
+        run: |
+          git clone --depth 1 https://github.com/LuciusChen/clutch.git ../clutch
+          emacs -Q --batch \
+            --eval '(require (quote package))' \
+            --eval '(setq package-archives (quote (("melpa" . "https://melpa.org/packages/"))))' \
+            --eval '(package-refresh-contents)' \
+            --eval '(package-install (quote transient))'
+      - name: Run bridge tests
+        run: |
+          emacs -Q --batch --eval '(package-initialize)' -L . -L ../clutch \
+            -l test/ob-clutch-test.el --eval '(ert-run-tests-batch-and-exit)'
+      - name: Compile without warnings
+        run: |
+          emacs -Q --batch --eval '(package-initialize)' -L . -L ../clutch \
+            --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile ob-clutch.el

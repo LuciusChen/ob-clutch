@@ -12,8 +12,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
   :after clutch)
 #+end_src
 
-For native backends, installing =clutch= is enough.  Its package metadata pulls
-in =mysql= and =pg= transitively.
+Native MySQL and PostgreSQL additionally require the optional =mysql= and =pgsql= protocol packages. Clutch loads each package when that backend connects; SQLite uses Emacs's built-in SQLite support.
 
 Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s JDBC bridge as well:
 
@@ -69,7 +68,9 @@ Backend-specific headers are passed through when relevant:
 
 - PostgreSQL: =:schema=, =:tls=, =:sslmode=, =:query-timeout=
 - MySQL: =:tls=, =:ssl-mode=
-- JDBC: =:url=, =:sid=, =:catalog=, =:manual-commit=, =:rpc-timeout=
+- JDBC: =:url=, =:driver-class=, =:sid=, =:catalog=, =:manual-commit=, =:rpc-timeout=
+
+Generic =:backend jdbc= blocks require an explicit =:driver-class=, for example =:url jdbc:h2:mem:demo :driver-class org.h2.Driver :user sa=. The corresponding driver jar must be installed in Clutch's JDBC runtime.
 
 =:max-rows= truncates data rows after the query returns.  The default is
 unlimited; customize =org-babel-clutch-max-rows= or set =:max-rows= per block.

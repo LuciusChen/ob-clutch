@@ -215,4 +215,24 @@
                         (:user . "root")
                         (:max-rows . "2")))
                      '(("id") hline (1) (2)))))))
+(ert-deftest ob-clutch-test-inline-jdbc-driver-class-reaches-connect ()
+  "Babel's public executor passes the explicit JDBC driver to Clutch."
+  (let ((ob-clutch--connection-cache (make-hash-table :test 'equal))
+        captured)
+    (cl-letf (((symbol-function 'clutch-prepare-connection-params)
+               (lambda (params _directory) params))
+              ((symbol-function 'clutch-open-connection)
+               (lambda (params) (setq captured params) 'audit-conn))
+              ((symbol-function 'clutch-db-query)
+               (lambda (_conn _sql)
+                 (make-clutch-db-result
+                  :columns '((:name "answer")) :rows '((42))))))
+      (should (equal (org-babel-execute:clutch
+                      "SELECT 42" '((:backend . "jdbc")
+                                    (:url . "jdbc:h2:mem:audit")
+                                    (:driver-class . "org.h2.Driver")
+                                    (:user . "sa")))
+                     '(("answer") hline (42))))
+      (should (equal (plist-get captured :driver-class) "org.h2.Driver")))))
+
 ;;; ob-clutch-test.el ends here

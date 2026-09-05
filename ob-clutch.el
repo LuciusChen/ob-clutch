@@ -97,6 +97,7 @@ Nil means unlimited.  A source block can override this with the
     (tramp . :any)
     (tramp-default-directory . :any)
     (url . :any)
+    (driver-class . :any)
     (sid . :any)
     (schema . :any)
     (catalog . :any)
@@ -133,9 +134,9 @@ Nil means unlimited.  A source block can override this with the
   "Supported inline SQLite connection keys.")
 
 (defconst ob-clutch--jdbc-inline-param-keys
-  '(:host :port :user :password :database :url :sid :schema :catalog
-    :manual-commit :connect-timeout :read-idle-timeout :query-timeout
-    :rpc-timeout)
+  '(:host :port :user :password :database :url :driver-class :sid :schema :catalog
+          :manual-commit :connect-timeout :read-idle-timeout :query-timeout
+          :rpc-timeout)
   "Supported inline JDBC connection keys.")
 
 (defconst ob-clutch--numeric-header-keys
@@ -265,13 +266,8 @@ ob-clutch needing to know about clutch-db-jdbc."
   "Return a Clutch connection plist from Babel PARAMS.
 DEFAULT-BACKEND is used by language-specific executors."
   (if-let* ((conn-name (cdr (assq :connection params))))
-      (let* ((entry (or (assoc conn-name clutch-connection-alist)
+      (let* ((plist (or (clutch-saved-connection-params conn-name)
                         (user-error "Unknown connection: %s" conn-name)))
-             (plist (copy-sequence (cdr entry)))
-             (plist (if (or (plist-get plist :password)
-                            (plist-get plist :pass-entry))
-                        plist
-                      (append plist (list :pass-entry conn-name))))
              (backend (ob-clutch--normalize-backend
                        (or (plist-get plist :backend) default-backend 'mysql))))
         (plist-put plist :backend backend))
