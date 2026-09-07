@@ -57,8 +57,6 @@
 (require 'clutch)
 (require 'clutch-backend)
 
-(defvar clutch-connection-alist)
-
 (defgroup org-babel-clutch nil
   "Org-Babel integration for clutch database backends."
   :group 'org-babel
@@ -219,22 +217,6 @@ When truncation happens, emit a message describing the number of hidden rows."
         rows)
     rows))
 
-(defun ob-clutch--normalize-backend (backend)
-  "Normalize BACKEND string or symbol for `clutch-open-connection'.
-Pure Elisp backends are canonicalized (mysql/pg/sqlite).
-Any other symbol is passed through as-is; `clutch-open-connection' will signal
-an error if the backend is truly unknown.  This allows JDBC driver symbols
-such as oracle, sqlserver, db2, snowflake, and redshift to work without
-ob-clutch needing to know about clutch-db-jdbc."
-  (let ((sym (if (stringp backend)
-                 (intern (downcase backend))
-               backend)))
-    (pcase sym
-      ((or 'mysql 'mariadb) 'mysql)
-      ((or 'pg 'postgres 'postgresql) 'pg)
-      ('sqlite 'sqlite)
-      (_ sym))))
-
 (defun ob-clutch--inline-params (params backend)
   "Build inline connection params from Babel PARAMS for BACKEND."
   (let ((conn-params (ob-clutch--params-alist-to-plist
@@ -268,12 +250,12 @@ DEFAULT-BACKEND is used by language-specific executors."
   (if-let* ((conn-name (cdr (assq :connection params))))
       (let* ((plist (or (clutch-saved-connection-params conn-name)
                         (user-error "Unknown connection: %s" conn-name)))
-             (backend (ob-clutch--normalize-backend
+             (backend (clutch-backend-normalize
                        (or (plist-get plist :backend) default-backend 'mysql))))
         (plist-put plist :backend backend))
     (let* ((backend-sym (or (cdr (assq :backend params)) default-backend))
            (backend (or (and backend-sym
-                             (ob-clutch--normalize-backend backend-sym))
+                             (clutch-backend-normalize backend-sym))
                         (user-error
                          "Missing :backend for clutch block (or use :connection to reference a saved connection)")))
            (conn-params (ob-clutch--inline-params params backend)))
@@ -284,13 +266,19 @@ DEFAULT-BACKEND is used by language-specific executors."
 (defun ob-clutch--connect (params default-backend)
   "Get or create a cached Clutch connection for PARAMS using DEFAULT-BACKEND."
   (let* ((conn-params (ob-clutch--resolve-connection params default-backend))
+         (sqlite-p (eq (plist-get conn-params :backend) 'sqlite))
+         (conn-params (if sqlite-p
+                          (clutch-prepare-connection-params
+                           conn-params default-directory)
+                        conn-params))
          (source-origin (file-remote-p default-directory))
          (key (format "%S:%S" conn-params source-origin))
          (cached (gethash key ob-clutch--connection-cache)))
     (if (and cached (clutch-db-live-p cached))
         cached
       (let* ((prepared-params
-              (clutch-prepare-connection-params conn-params default-directory))
+              (if sqlite-p conn-params
+                (clutch-prepare-connection-params conn-params default-directory)))
              (conn (clutch-open-connection prepared-params)))
         (puthash key conn ob-clutch--connection-cache)
         conn))))

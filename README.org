@@ -32,18 +32,16 @@ with a =:backend= header argument.
 
 * Saved connections and passwords
 
-=:connection= resolves entries from =clutch-connection-alist=.  Saved
-connections without an explicit =:backend= follow clutch's default and use
-=mysql=.
+=:connection= resolves entries from =clutch-connection-alist= through Clutch's public saved-connection API. A saved =:backend= wins over the block language; without it, language-specific blocks use their backend and generic =clutch= blocks use =mysql=. Inline and saved backend names use Clutch's alias registry.
 
 Password resolution follows clutch's connection rules:
 
 1. =:password=
-2. =:pass-entry= via =auth-source-pass=
-3. =auth-source-search= via =:host= / =:user= / =:port=
+2. A saved =:profile-entry= supplies its profile secret unless an explicit =:password= or =:pass-entry= overrides it.
+3. =:pass-entry= via =auth-source-pass=
+4. =auth-source-search= via =:host= / =:user= / =:port=
 
-When a saved connection omits =:pass-entry=, =ob-clutch= defaults it to the
-connection name so pass entries like =mysql/dev= can still match =dev=.
+When a saved connection has no =:password=, =:pass-entry=, or =:profile-entry=, Clutch defaults =:pass-entry= to the connection name so pass entries like =mysql/dev= can still match =dev=. Babel does not inject a second password source beside a profile or modify the saved entry.
 
 Saved connections and inline headers also honor Clutch transport keys:
 =:ssh-host=, =:tramp=, and the longer =:tramp-default-directory= spelling.
@@ -95,6 +93,8 @@ SELECT now();
 #+end_src
 
 SQLite:
+
+Relative =:database= filenames are resolved by Clutch against the block's local execution directory before caching. Different directories' =app.db= files do not share a connection; equivalent relative and absolute paths to the same file reuse one connection. =:memory:= keeps its existing cached in-memory behavior. This requires Clutch's corresponding connection-preparation fix.
 
 #+begin_src org
 #+begin_src sqlite :database /tmp/demo.db
