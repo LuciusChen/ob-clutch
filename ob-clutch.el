@@ -4,7 +4,7 @@
 ;; Author: Lucius Chen <chenyh572@gmail.com>
 ;; Maintainer: Lucius Chen <chenyh572@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (clutch "0.1"))
+;; Package-Requires: ((emacs "29.1") (clutch "0.5.1"))
 ;; Keywords: languages, data
 ;; URL: https://github.com/LuciusChen/ob-clutch
 ;; SPDX-License-Identifier: GPL-3.0-or-later

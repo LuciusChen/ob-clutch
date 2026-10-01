@@ -4,7 +4,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
 
 * Installation
 
-=ob-clutch= depends on the =clutch= package:
+=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.5.1 or later:
 
 #+begin_src emacs-lisp
 (use-package clutch)
@@ -94,7 +94,7 @@ SELECT now();
 
 SQLite:
 
-Relative =:database= filenames are resolved by Clutch against the block's local execution directory before caching. Different directories' =app.db= files do not share a connection; equivalent relative and absolute paths to the same file reuse one connection. =:memory:= keeps its existing cached in-memory behavior. This requires Clutch's corresponding connection-preparation fix.
+Relative =:database= filenames are resolved by Clutch against the block's local execution directory before caching. Different directories' =app.db= files do not share a connection; equivalent relative and absolute paths to the same file reuse one connection. =:memory:= keeps its existing cached in-memory behavior. This needs Clutch 0.5.1 or later.
 
 #+begin_src org
 #+begin_src sqlite :database /tmp/demo.db
