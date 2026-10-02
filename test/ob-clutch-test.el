@@ -263,7 +263,15 @@
                       '((:host . "127.0.0.1")
                         (:user . "root")
                         (:max-rows . "2")))
-                     '(("id") hline (1) (2)))))))
+                     '(("id") hline (1) (2))))
+      (ert-info ("the obsolete option name still sets the default")
+        (with-suppressed-warnings ((obsolete org-babel-clutch-max-rows))
+          (let ((org-babel-clutch-max-rows 1))
+            (should (equal (org-babel-execute:mysql
+                            "select id from demo"
+                            '((:host . "127.0.0.1")
+                              (:user . "root")))
+                           '(("id") hline (1))))))))))
 
 (ert-deftest ob-clutch-test-inline-jdbc-driver-class-reaches-connect ()
   "Babel's public executor passes the explicit JDBC driver to Clutch."
