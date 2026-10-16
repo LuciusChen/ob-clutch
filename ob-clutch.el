@@ -335,22 +335,57 @@ while a statement runs.")
 (defvar ob-clutch--job-counter 0
   "Number of jobs created, which numbers the next one.")
 
-(defun ob-clutch--job-show (job text)
-  "Show TEXT as the result of JOB's block, if its placeholder is still there.
-Nothing changes when the buffer is gone or the result was edited or
-replaced meanwhile, such as by running the block again."
+(defun ob-clutch--with-placeholder (job fn)
+  "Call FN with the bounds of JOB's placeholder row, in its block's buffer.
+Do nothing when the buffer is gone or the result no longer is that row,
+alone unless `:results' appends or prepends: an edited result, or a newer
+run of the block, is left as it is."
   (when-let* ((buffer (marker-buffer (ob-clutch--job-marker job)))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
       (save-excursion
         (goto-char (ob-clutch--job-marker job))
         (when-let* ((start (org-babel-where-is-src-block-result))
-                    ((save-excursion
-                       (goto-char start)
-                       (search-forward (ob-clutch--job-id job)
-                                       (org-babel-result-end) t))))
-          (org-babel-insert-result text (ob-clutch--job-result-params job)
-                                   (org-babel-get-src-block-info 'light)))))))
+                    (end (save-excursion (goto-char start) (org-babel-result-end)))
+                    (body (save-excursion
+                            (goto-char start)
+                            (when (looking-at "[ \t]*#\\+RESULTS.*\n")
+                              (goto-char (match-end 0)))
+                            (point)))
+                    (row (format "| *\\(?:Queued\\|Running\\) %s\\(?: *|\\)+"
+                                 (regexp-quote (ob-clutch--job-id job))))
+                    (bounds (save-excursion
+                              (goto-char start)
+                              (and (re-search-forward (concat "^" row "$") end t)
+                                   (cons (match-beginning 0) (match-end 0)))))
+                    ((or (cl-intersection '("append" "prepend")
+                                          (ob-clutch--job-result-params job)
+                                          :test #'equal)
+                         (string-match-p
+                          (concat "\\`" row "\\'")
+                          (string-trim
+                           (buffer-substring-no-properties body end))))))
+          (funcall fn (car bounds) (cdr bounds)))))))
+
+(defun ob-clutch--job-status (job)
+  "Show in JOB's placeholder whether the job is running or queued."
+  (ob-clutch--with-placeholder
+   job (lambda (beg end)
+         (goto-char beg)
+         (delete-region beg end)
+         (insert (format "| %s %s |"
+                         (if (eq (ob-clutch--job-state job) 'running)
+                             "Running" "Queued")
+                         (ob-clutch--job-id job))))))
+
+(defun ob-clutch--job-show (job value)
+  "Show VALUE as the result of JOB's block, in place of its placeholder."
+  (ob-clutch--with-placeholder
+   job (lambda (beg end)
+         (delete-region beg (min (point-max) (1+ end)))
+         (goto-char (ob-clutch--job-marker job))
+         (org-babel-insert-result value (ob-clutch--job-result-params job)
+                                  (org-babel-get-src-block-info 'light)))))
 
 (defun ob-clutch--job-start (job)
   "Start JOB's statement without blocking Emacs and return non-nil.
@@ -360,6 +395,16 @@ Return nil, starting nothing, when its backend cannot do that."
    (ob-clutch--job-conn job) (ob-clutch--job-sql job)
    (lambda (result error) (ob-clutch--job-finish job result error))))
 
+(defun ob-clutch--start-next (conn)
+  "Start the oldest job waiting for CONN, if any.
+A job that fails to start shows the error and the job after it starts."
+  (when-let* ((next (cl-find conn ob-clutch--jobs :key #'ob-clutch--job-conn)))
+    (setf (ob-clutch--job-state next) 'running)
+    (ob-clutch--job-status next)
+    (condition-case err
+        (ob-clutch--job-start next)
+      (error (ob-clutch--job-finish next nil err)))))
+
 (defun ob-clutch--job-finish (job result error)
   "Show RESULT, or ERROR when it is non-nil, for JOB and start the next job."
   (setq ob-clutch--jobs (delq job ob-clutch--jobs))
@@ -368,11 +413,7 @@ Return nil, starting nothing, when its backend cannot do that."
        job (if error
                (format "Error: %s" (error-message-string error))
              (ob-clutch--result-table result (ob-clutch--job-max-rows job))))
-    (when-let* ((next (cl-find (ob-clutch--job-conn job) ob-clutch--jobs
-                               :key #'ob-clutch--job-conn)))
-      (ob-clutch--job-show
-       next (list (list (format "Running %s" (ob-clutch--job-id next)))))
-      (ob-clutch--job-start next))))
+    (ob-clutch--start-next (ob-clutch--job-conn job))))
 
 (defun ob-clutch--run-async (conn sql max-rows params)
   "Run SQL on CONN without blocking Emacs and return its placeholder result.
@@ -408,7 +449,7 @@ interrupted and its block shows the outcome when the server answers."
                      (let ((marker (ob-clutch--job-marker job)))
                        (and (eq (marker-buffer marker) (current-buffer))
                             (= marker head))))
-                   ob-clutch--jobs)
+                   ob-clutch--jobs :from-end t)
                   (user-error "No asynchronous run of this block"))))
     (if (eq (ob-clutch--job-state job) 'queued)
         (progn (setq ob-clutch--jobs (delq job ob-clutch--jobs))
