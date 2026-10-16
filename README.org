@@ -4,7 +4,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
 
 * Installation
 
-=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.5.1 or later:
+=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.5.2 or later:
 
 #+begin_src emacs-lisp
 (use-package clutch)
@@ -61,6 +61,7 @@ configured, =ob-clutch= applies =clutch-tramp-context-policy= before connecting.
 - =:ssh-host=
 - =:tramp=
 - =:max-rows=
+- =:async=
 
 Backend-specific headers are passed through when relevant:
 
@@ -78,6 +79,20 @@ large table is not fetched in full.  When more rows exist, the table ends with
 a line below a rule, =First N rows shown, more follow=; that line is part of the
 table, so use =:max-rows nil= or a larger limit when another block reads the
 result.  Use =:max-rows nil= to send the SQL as written and return every row.
+
+* Asynchronous blocks
+
+=:async yes= runs the statement without blocking Emacs, on native MySQL and PostgreSQL and on JDBC connections:
+
+#+begin_src org
+,#+begin_src postgresql :connection prod :async yes
+SELECT pg_sleep(30), count(*) FROM orders;
+,#+end_src
+#+end_src
+
+The block shows =Running ob-clutch-N= under =#+RESULTS:= and gets its table, or =Error: ...=, when the statement ends.  A connection refuses other work while a statement runs, so blocks that use the same connection wait for each other and run one after another, shown as =Queued ob-clutch-N=; blocks on different connections run together.  Running a block again while its earlier run is unfinished does not cancel the earlier statement, but only the latest run writes the result.  A result you edited or deleted meanwhile is left alone.  Backends that cannot run SQL without blocking Emacs, such as SQLite, run the block at once and return its result as usual.
+
+=M-x ob-clutch-cancel-block-at-point= cancels the run of the block at point.  A queued block is dropped and shows =Cancelled=.  A running statement is interrupted, and the block shows the server's answer: the cancellation error, or the result if the statement had already finished.  A synchronous block on a connection that an asynchronous one is using fails with the connection's busy error; make it asynchronous too, so that it queues.
 
 * Examples
 

@@ -4,7 +4,7 @@
 ;; Author: Lucius Chen <chenyh572@gmail.com>
 ;; Maintainer: Lucius Chen <chenyh572@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (clutch "0.5.1"))
+;; Package-Requires: ((emacs "29.1") (clutch "0.5.2"))
 ;; Keywords: languages, data
 ;; URL: https://github.com/LuciusChen/ob-clutch
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -43,6 +43,8 @@
 ;;   :backend                   mysql|pg|postgresql|sqlite|oracle|sqlserver|...
 ;;   :host :port :user :password :database
 ;;   :ssh-host :tramp
+;;   :max-rows                  most data rows returned (default 1000)
+;;   :async                     yes to run without blocking Emacs
 ;;
 ;; JDBC backends (oracle, sqlserver, db2, snowflake, redshift) require
 ;; clutch-db-jdbc.el to be loaded and clutch-jdbc-agent.jar to be available.
@@ -112,7 +114,8 @@ of rows already make Emacs unresponsive for seconds."
     (read-idle-timeout . :any)
     (query-timeout . :any)
     (rpc-timeout . :any)
-    (max-rows . :any))
+    (max-rows . :any)
+    (async . :any))
   "Clutch-specific header arguments for source blocks.")
 
 (defvar ob-clutch--connection-cache (make-hash-table :test 'equal)
@@ -293,14 +296,9 @@ DEFAULT-BACKEND is used by language-specific executors."
    ((listp val) (or (clutch-db-format-temporal val) (format "%S" val)))
    (t (format "%S" val))))
 
-(defun ob-clutch--execute (body params default-backend)
-  "Execute BODY with Babel PARAMS using DEFAULT-BACKEND."
-  (let* ((conn (ob-clutch--connect params default-backend))
-         (max-rows (ob-clutch--max-rows params))
-         (sql (ob-clutch--limited-sql
-               conn (org-babel-expand-body:generic body params) max-rows))
-         (result (clutch-db-query conn sql))
-         (columns (clutch-db-result-columns result))
+(defun ob-clutch--result-table (result max-rows)
+  "Return the Org value for the `clutch-db-result' RESULT cut to MAX-ROWS."
+  (let* ((columns (clutch-db-result-columns result))
          (rows (clutch-db-result-rows result))
          (cut (and max-rows (> (length rows) max-rows))))
     (if columns
@@ -318,6 +316,115 @@ DEFAULT-BACKEND is used by language-specific executors."
                                         max-rows))))))
       (format "Affected rows: %s"
               (or (clutch-db-result-affected-rows result) 0)))))
+
+;;;; Asynchronous blocks
+
+(cl-defstruct (ob-clutch--job (:constructor ob-clutch--make-job))
+  "A block executed with `:async yes' that has not finished."
+  conn sql max-rows
+  marker                                ; start of the source block
+  id                                    ; text that tells its result apart
+  result-params
+  (state 'queued))                      ; `queued' or `running'
+
+(defvar ob-clutch--jobs nil
+  "Unfinished jobs, oldest first.
+A connection runs its jobs one at a time, since it refuses other work
+while a statement runs.")
+
+(defvar ob-clutch--job-counter 0
+  "Number of jobs created, which numbers the next one.")
+
+(defun ob-clutch--job-show (job text)
+  "Show TEXT as the result of JOB's block, if its placeholder is still there.
+Nothing changes when the buffer is gone or the result was edited or
+replaced meanwhile, such as by running the block again."
+  (when-let* ((buffer (marker-buffer (ob-clutch--job-marker job)))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char (ob-clutch--job-marker job))
+        (when-let* ((start (org-babel-where-is-src-block-result))
+                    ((save-excursion
+                       (goto-char start)
+                       (search-forward (ob-clutch--job-id job)
+                                       (org-babel-result-end) t))))
+          (org-babel-insert-result text (ob-clutch--job-result-params job)
+                                   (org-babel-get-src-block-info 'light)))))))
+
+(defun ob-clutch--job-start (job)
+  "Start JOB's statement without blocking Emacs and return non-nil.
+Return nil, starting nothing, when its backend cannot do that."
+  (setf (ob-clutch--job-state job) 'running)
+  (clutch-db-query-async
+   (ob-clutch--job-conn job) (ob-clutch--job-sql job)
+   (lambda (result error) (ob-clutch--job-finish job result error))))
+
+(defun ob-clutch--job-finish (job result error)
+  "Show RESULT, or ERROR when it is non-nil, for JOB and start the next job."
+  (setq ob-clutch--jobs (delq job ob-clutch--jobs))
+  (unwind-protect
+      (ob-clutch--job-show
+       job (if error
+               (format "Error: %s" (error-message-string error))
+             (ob-clutch--result-table result (ob-clutch--job-max-rows job))))
+    (when-let* ((next (cl-find (ob-clutch--job-conn job) ob-clutch--jobs
+                               :key #'ob-clutch--job-conn)))
+      (ob-clutch--job-show
+       next (list (list (format "Running %s" (ob-clutch--job-id next)))))
+      (ob-clutch--job-start next))))
+
+(defun ob-clutch--run-async (conn sql max-rows params)
+  "Run SQL on CONN without blocking Emacs and return its placeholder result.
+The block gets the real result when the statement finishes.  A statement
+for a connection that an earlier block still uses waits for it, since the
+connection refuses other work meanwhile.  A backend that cannot run SQL
+without blocking returns the result at once.  MAX-ROWS limits the rows
+and PARAMS are the block's header arguments."
+  (let* ((job (ob-clutch--make-job
+               :conn conn :sql sql :max-rows max-rows
+               :marker (save-excursion
+                         (goto-char (org-babel-where-is-src-block-head))
+                         (point-marker))
+               :id (format "ob-clutch-%d" (cl-incf ob-clutch--job-counter))
+               :result-params (cdr (assq :result-params params))))
+         (waiting (cl-find conn ob-clutch--jobs :key #'ob-clutch--job-conn)))
+    (if (or waiting (ob-clutch--job-start job))
+        (progn
+          (setq ob-clutch--jobs (append ob-clutch--jobs (list job)))
+          (list (list (format "%s %s" (if waiting "Queued" "Running")
+                              (ob-clutch--job-id job)))))
+      (ob-clutch--result-table (clutch-db-query conn sql) max-rows))))
+
+(defun ob-clutch-cancel-block-at-point ()
+  "Cancel the asynchronous run of the source block at point.
+A run that waits for the connection is dropped.  A running statement is
+interrupted and its block shows the outcome when the server answers."
+  (interactive)
+  (let* ((head (or (org-babel-where-is-src-block-head)
+                   (user-error "Not in a source block")))
+         (job (or (cl-find-if
+                   (lambda (job)
+                     (let ((marker (ob-clutch--job-marker job)))
+                       (and (eq (marker-buffer marker) (current-buffer))
+                            (= marker head))))
+                   ob-clutch--jobs)
+                  (user-error "No asynchronous run of this block"))))
+    (if (eq (ob-clutch--job-state job) 'queued)
+        (progn (setq ob-clutch--jobs (delq job ob-clutch--jobs))
+               (ob-clutch--job-show job "Cancelled"))
+      (unless (clutch-db-interrupt-query (ob-clutch--job-conn job))
+        (user-error "This connection cannot interrupt a statement")))))
+
+(defun ob-clutch--execute (body params default-backend)
+  "Execute BODY with Babel PARAMS using DEFAULT-BACKEND."
+  (let* ((conn (ob-clutch--connect params default-backend))
+         (max-rows (ob-clutch--max-rows params))
+         (sql (ob-clutch--limited-sql
+               conn (org-babel-expand-body:generic body params) max-rows)))
+    (if (ob-clutch--parse-boolean (cdr (assq :async params)) :async)
+        (ob-clutch--run-async conn sql max-rows params)
+      (ob-clutch--result-table (clutch-db-query conn sql) max-rows))))
 
 (defun org-babel-execute:clutch (body params)
   "Execute a generic clutch BODY with Babel PARAMS."
