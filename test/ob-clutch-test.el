@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'ert)
 (require 'ob-clutch)
+(require 'org)
 
 (defvar clutch-connection-alist)
 
@@ -329,6 +330,319 @@ A limit of the query's own still cuts the rows Clutch returns."
           (should (equal (ob-clutch-test--run "select id from demo")
                          '(("id") hline (1) hline
                            ("First 1 rows shown, more follow")))))))))
+
+(defmacro ob-clutch-test--with-async (started &rest body)
+  "Run BODY with a fake backend that starts statements and waits.
+Each statement started on it is pushed, as (CONN SQL CALLBACK), onto the
+variable STARTED; calling CALLBACK finishes it.  Interrupts are pushed
+onto `ob-clutch-test--interrupts'."
+  (declare (indent 1))
+  `(let ((ob-clutch--connection-cache (make-hash-table :test 'equal))
+         (ob-clutch--jobs nil)
+         (ob-clutch-test--interrupts nil))
+     (cl-letf (((symbol-function 'clutch-db-live-p) (lambda (_conn) nil))
+               ((symbol-function 'clutch-prepare-connection-params)
+                (lambda (params _dir) params))
+               ((symbol-function 'clutch-open-connection)
+                (lambda (params) (intern (format "conn-%s" (plist-get params :port)))))
+               ((symbol-function 'clutch-db-query-async)
+                (lambda (conn sql callback)
+                  (push (list conn sql callback) ,started)
+                  t))
+               ((symbol-function 'clutch-db-interrupt-query)
+                (lambda (conn) (push conn ob-clutch-test--interrupts) t)))
+       ,@body)))
+
+(defvar ob-clutch-test--interrupts nil
+  "Connections `clutch-db-interrupt-query' was called on.")
+
+(defun ob-clutch-test--ok (rows)
+  "Return a `clutch-db-result' with one column `id' and ROWS."
+  (make-clutch-db-result :columns '((:name "id")) :rows rows))
+
+(defun ob-clutch-test--block (sql &optional port extra)
+  "Return Org text for an async mysql block running SQL on PORT.
+EXTRA is more header arguments."
+  (format "#+begin_src mysql :host 127.0.0.1 :port %s :user root :async yes :max-rows nil %s\n%s\n#+end_src\n"
+          (or port 1) (or extra "") sql))
+
+(defmacro ob-clutch-test--in-org (text &rest body)
+  "Run BODY in an Org buffer holding TEXT, point at its first block."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (org-mode)
+     (let ((org-confirm-babel-evaluate nil))
+       (insert ,text)
+       (goto-char (point-min))
+       ,@body)))
+
+(defun ob-clutch-test--goto-block (n)
+  "Move point to the start of the Nth source block."
+  (goto-char (point-min))
+  (re-search-forward "^ *#\\+begin_src" nil nil n)
+  (beginning-of-line))
+
+(defun ob-clutch-test--results ()
+  "Return the buffer text after the first #+RESULTS: line, trimmed."
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward "^#\\+RESULTS:\n" nil t)
+        (string-trim (buffer-substring-no-properties (point) (point-max)))
+      "")))
+
+(ert-deftest ob-clutch-test-async-block-shows-placeholder-then-result ()
+  "An async block returns at once and gets its table when the statement ends."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select id from t")
+        (org-babel-execute-src-block)
+        (should (= (length started) 1))
+        (should (string-match-p "| Running ob-clutch-[0-9]+ |"
+                                (ob-clutch-test--results)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1) (2))) nil)
+        (should (equal (ob-clutch-test--results)
+                       "| id |\n|----|\n|  1 |\n|  2 |"))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-async-block-reports-the-error ()
+  "A statement that fails puts the error in the block's result."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select nope")
+        (org-babel-execute-src-block)
+        (funcall (nth 2 (car started)) nil '(error "Unknown column"))
+        (should (string-match-p "Error: Unknown column"
+                                (ob-clutch-test--results)))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-async-blocks-on-one-connection-run-in-order ()
+  "A second block waits for the first on the same connection."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1")
+                                      "\n"
+                                      (ob-clutch-test--block "select 2"))
+        (org-babel-execute-src-block)
+        (ob-clutch-test--goto-block 2)
+        (org-babel-execute-src-block)
+        (should (equal (mapcar #'cadr started) '("select 1")))
+        (should (string-match-p "Queued" (buffer-string)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (equal (mapcar #'cadr (reverse started))
+                       '("select 1" "select 2")))
+        (should (string-match-p "Running" (buffer-string)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((2))) nil)
+        (should-not ob-clutch--jobs)
+        (should-not (string-match-p "Queued\\|Running" (buffer-string)))))))
+
+(ert-deftest ob-clutch-test-async-blocks-on-two-connections-run-together ()
+  "Blocks on different connections do not wait for each other."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1" 1)
+                                      "\n"
+                                      (ob-clutch-test--block "select 2" 2))
+        (org-babel-execute-src-block)
+        (ob-clutch-test--goto-block 2)
+        (org-babel-execute-src-block)
+        (should (= (length started) 2))))))
+
+(ert-deftest ob-clutch-test-async-block-without-backend-support-runs-at-once ()
+  "A backend that cannot start without blocking returns the result directly."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (cl-letf (((symbol-function 'clutch-db-query-async)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'clutch-db-query)
+                 (lambda (_conn _sql) (ob-clutch-test--ok '((7))))))
+        (ob-clutch-test--in-org (ob-clutch-test--block "select 7")
+          (org-babel-execute-src-block)
+          (should (equal (ob-clutch-test--results) "| id |\n|----|\n|  7 |"))
+          (should-not ob-clutch--jobs))))))
+
+(ert-deftest ob-clutch-test-async-result-is-dropped-after-the-block-reran ()
+  "A late result does not overwrite the result of a newer run."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select 1")
+        (org-babel-execute-src-block)
+        (let ((old (car started)))
+          (org-babel-execute-src-block)
+          (funcall (nth 2 old) (ob-clutch-test--ok '((1))) nil)
+          (should (string-match-p "Running ob-clutch-[0-9]+" (ob-clutch-test--results)))
+          (should-not (string-match-p "| 1 |" (ob-clutch-test--results)))
+          (funcall (nth 2 (car started)) (ob-clutch-test--ok '((2))) nil)
+          (should (equal (ob-clutch-test--results)
+                         "| id |\n|----|\n|  2 |")))))))
+
+(ert-deftest ob-clutch-test-async-result-leaves-an-edited-result-alone ()
+  "A result the user replaced while the statement ran is not overwritten."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select 1")
+        (org-babel-execute-src-block)
+        (goto-char (point-min))
+        (re-search-forward "^| Running .* |$")
+        (replace-match "| mine |")
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (equal (ob-clutch-test--results) "| mine |"))))))
+
+(ert-deftest ob-clutch-test-async-failed-dispatch-does-not-stall-the-queue ()
+  "A queued statement that cannot start shows its error; the next one starts."
+  (let (started (calls 0))
+    (ob-clutch-test--with-async started
+      (cl-letf (((symbol-function 'clutch-db-query-async)
+                 (lambda (conn sql callback)
+                   (when (= (cl-incf calls) 2)
+                     (signal 'error '("Connection closed")))
+                   (push (list conn sql callback) started)
+                   t)))
+        (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1") "\n"
+                                        (ob-clutch-test--block "select 2") "\n"
+                                        (ob-clutch-test--block "select 3"))
+          (dolist (n '(1 2 3))
+            (ob-clutch-test--goto-block n)
+            (org-babel-execute-src-block))
+          (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+          (should (string-match-p "Error: Connection closed" (buffer-string)))
+          (should (equal (mapcar #'cadr started) '("select 3" "select 1")))
+          (funcall (nth 2 (car started)) (ob-clutch-test--ok '((3))) nil)
+          (should-not ob-clutch--jobs))))))
+
+(ert-deftest ob-clutch-test-async-append-replaces-only-the-placeholder ()
+  "`:results append' keeps earlier results, also wider ones, and leaves no placeholder."
+  (dolist (mode '("append" "prepend"))
+    (let (started)
+      (ob-clutch-test--with-async started
+        (ob-clutch-test--in-org
+            (ob-clutch-test--block "select 1" nil (format ":results %s table" mode))
+          (org-babel-execute-src-block)
+          (funcall (nth 2 (car started))
+                   (make-clutch-db-result :columns '((:name "id") (:name "name"))
+                                          :rows '((1 "a")))
+                   nil)
+          (org-babel-execute-src-block)
+          (funcall (nth 2 (car started)) (ob-clutch-test--ok '((2))) nil)
+          (should-not (string-match-p "Running\\|Queued" (buffer-string)))
+          (should (string-match-p "| *1 *|" (buffer-string)))
+          (should (string-match-p "| *2 *|" (buffer-string))))))))
+
+(ert-deftest ob-clutch-test-async-result-keeps-a-note-added-to-the-placeholder ()
+  "A note added to the placeholder row while the statement runs survives."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select 1")
+        (org-babel-execute-src-block)
+        (re-search-forward "^| Running [^ ]+ |")
+        (backward-char 1)
+        (insert " my-note |")
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (string-match-p "my-note" (buffer-string)))
+        (should-not (string-match-p "| 1 |" (buffer-string)))))))
+
+(ert-deftest ob-clutch-test-cancel-targets-the-latest-run-of-a-block ()
+  "After a rerun, cancelling drops the run the block shows."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select 1")
+        (org-babel-execute-src-block)
+        (org-babel-execute-src-block)
+        (should (string-match-p "Queued" (buffer-string)))
+        (ob-clutch-cancel-block-at-point)
+        (should (string-match-p "Cancelled" (buffer-string)))
+        (should-not ob-clutch-test--interrupts)
+        (should (= (length ob-clutch--jobs) 1))))))
+
+(ert-deftest ob-clutch-test-async-block-in-a-list-item-gets-its-result ()
+  "A block indented inside a list item has its placeholder replaced too."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org
+          "- item\n  #+begin_src mysql :host 127.0.0.1 :port 1 :user root :async yes :max-rows nil\n  select 1\n  #+end_src\n"
+        (ob-clutch-test--goto-block 1)
+        (org-babel-execute-src-block)
+        (should (string-match-p "^ +| Running ob-clutch-[0-9]+ |" (buffer-string)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should-not (string-match-p "Running" (buffer-string)))
+        (should (string-match-p "^ +| *id *|" (buffer-string)))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-async-failure-to-show-does-not-stall-the-queue ()
+  "A result that cannot be shown, as in a read-only buffer, still starts the next job."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1") "\n"
+                                      (ob-clutch-test--block "select 2"))
+        (ob-clutch-test--goto-block 1)
+        (org-babel-execute-src-block)
+        (ob-clutch-test--goto-block 2)
+        (org-babel-execute-src-block)
+        (setq buffer-read-only t)
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (equal (mapcar #'cadr started) '("select 2" "select 1")))
+        (setq buffer-read-only nil)
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((2))) nil)
+        (should (string-match-p "| *2 *|" (buffer-string)))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-async-result-for-a-killed-buffer-is-ignored ()
+  "Finishing a statement whose buffer is gone does nothing and moves on."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (with-temp-buffer
+        (org-mode)
+        (let ((org-confirm-babel-evaluate nil))
+          (insert (ob-clutch-test--block "select 1"))
+          (goto-char (point-min))
+          (org-babel-execute-src-block)))
+      (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+      (should-not ob-clutch--jobs))))
+
+(ert-deftest ob-clutch-test-cancel-drops-a-waiting-block ()
+  "Cancelling a block that waits for the connection never runs it."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1")
+                                      "\n"
+                                      (ob-clutch-test--block "select 2"))
+        (org-babel-execute-src-block)
+        (ob-clutch-test--goto-block 2)
+        (org-babel-execute-src-block)
+        (ob-clutch-cancel-block-at-point)
+        (should (string-match-p "Cancelled" (buffer-string)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (equal (mapcar #'cadr started) '("select 1")))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-cancel-interrupts-a-running-block ()
+  "Cancelling the running block interrupts its connection."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (ob-clutch-test--block "select sleep(9)")
+        (org-babel-execute-src-block)
+        (ob-clutch-cancel-block-at-point)
+        (should (equal ob-clutch-test--interrupts '(conn-1)))
+        (funcall (nth 2 (car started)) nil '(error "Query interrupted"))
+        (should (string-match-p "Error: Query interrupted"
+                                (ob-clutch-test--results)))))))
+
+(ert-deftest ob-clutch-test-cancel-needs-an-async-run ()
+  "Cancelling a block that has no pending run is a user error."
+  (ob-clutch-test--with-async started
+    (ob-clutch-test--in-org (ob-clutch-test--block "select 1")
+      (should-error (ob-clutch-cancel-block-at-point) :type 'user-error))))
+
+(ert-deftest ob-clutch-test-block-without-async-still-blocks ()
+  "Without `:async yes' the block runs through `clutch-db-query'."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (cl-letf (((symbol-function 'clutch-db-query)
+                 (lambda (_conn _sql) (ob-clutch-test--ok '((5))))))
+        (ob-clutch-test--in-org
+            "#+begin_src mysql :host 127.0.0.1 :user root :max-rows nil\nselect 5\n#+end_src\n"
+          (org-babel-execute-src-block)
+          (should-not started)
+          (should (equal (ob-clutch-test--results) "| id |\n|----|\n|  5 |")))))))
 
 (ert-deftest ob-clutch-test-inline-jdbc-driver-class-reaches-connect ()
   "Babel's public executor passes the explicit JDBC driver to Clutch."
