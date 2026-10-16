@@ -90,7 +90,7 @@
                    (should (equal sql "select 17"))
                    (make-clutch-db-result :columns '((:name "n")) :rows '((17))))))
         (should (equal (org-babel-execute:clutch
-                        "select 17" '((:connection . "dev")))
+                        "select 17" '((:connection . "dev") (:max-rows . "nil")))
                        '(("n") hline (17))))
         (should (equal (plist-get connected :password) expected-password))
         (should (equal (plist-get connected :pass-entry)
@@ -202,7 +202,7 @@
                  (make-clutch-db-result :columns nil :rows nil :affected-rows 1))))
       (should (equal (org-babel-execute:clutch
                       "select 1"
-                      '((:connection . "demo")))
+                      '((:connection . "demo") (:max-rows . "nil")))
                      "Affected rows: 1"))
       (should (eq (plist-get connected :backend) 'mysql))
       (should (equal (plist-get connected :database) "demo"))
@@ -240,38 +240,95 @@
    (org-babel-execute:clutch "select 1" nil)
    :type 'user-error))
 
-(ert-deftest ob-clutch-test-max-rows-truncates-table-results ()
-  "Table results should respect the :max-rows header."
-  (let ((ob-clutch--connection-cache (make-hash-table :test 'equal)))
-    (cl-letf (((symbol-function 'clutch-db-live-p)
-               (lambda (_conn) nil))
-              ((symbol-function 'clutch-prepare-connection-params)
-               (lambda (params _source-default-directory) params))
-              ((symbol-function 'clutch-open-connection)
-               (lambda (_params)
-                 'fake-conn))
-              ((symbol-function 'org-babel-expand-body:generic)
-               (lambda (body _params) body))
-              ((symbol-function 'clutch-db-query)
-               (lambda (_conn _sql)
-                 (make-clutch-db-result
-                  :columns '((:name "id"))
-                  :rows '((1) (2) (3))
-                  :affected-rows nil))))
-      (should (equal (org-babel-execute:mysql
-                      "select id from demo"
-                      '((:host . "127.0.0.1")
-                        (:user . "root")
-                        (:max-rows . "2")))
-                     '(("id") hline (1) (2))))
-      (ert-info ("the obsolete option name still sets the default")
-        (with-suppressed-warnings ((obsolete org-babel-clutch-max-rows))
-          (let ((org-babel-clutch-max-rows 1))
-            (should (equal (org-babel-execute:mysql
-                            "select id from demo"
-                            '((:host . "127.0.0.1")
-                              (:user . "root")))
-                           '(("id") hline (1))))))))))
+(defmacro ob-clutch-test--with-rows (rows sent &rest body)
+  "Run BODY with a fake connection whose queries return ROWS.
+Each SQL string sent to the connection is pushed onto the variable SENT."
+  (declare (indent 2))
+  `(let ((ob-clutch--connection-cache (make-hash-table :test 'equal)))
+     (cl-letf (((symbol-function 'clutch-db-live-p) (lambda (_conn) nil))
+               ((symbol-function 'clutch-prepare-connection-params)
+                (lambda (params _dir) params))
+               ((symbol-function 'clutch-open-connection)
+                (lambda (_params) 'fake-conn))
+               ((symbol-function 'org-babel-expand-body:generic)
+                (lambda (body _params) body))
+               ((symbol-function 'clutch-db-query)
+                (lambda (_conn sql)
+                  (push sql ,sent)
+                  (make-clutch-db-result :columns '((:name "id"))
+                                         :rows ,rows))))
+       ,@body)))
+
+(defun ob-clutch-test--run (sql &rest params)
+  "Run SQL as a mysql block with the extra header PARAMS."
+  (org-babel-execute:mysql
+   sql (append '((:host . "127.0.0.1") (:user . "root")) params)))
+
+(ert-deftest ob-clutch-test-max-rows-asks-for-one-row-more ()
+  "A limited select fetches one row past the limit instead of every row."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2)) sent
+      (ob-clutch-test--run "select id from demo" '(:max-rows . "2"))
+      (should (equal sent '("select id from demo LIMIT 3 OFFSET 0"))))))
+
+(ert-deftest ob-clutch-test-max-rows-marks-a-cut-result ()
+  "A result with more rows than the limit ends in a visible note."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2) (3)) sent
+      (should (equal (ob-clutch-test--run "select id from demo"
+                                          '(:max-rows . "2"))
+                     '(("id") hline (1) (2) hline
+                       ("First 2 rows shown, more follow")))))))
+
+(ert-deftest ob-clutch-test-max-rows-leaves-a-complete-result-alone ()
+  "A result that fits the limit has no note."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2)) sent
+      (should (equal (ob-clutch-test--run "select id from demo"
+                                          '(:max-rows . "2"))
+                     '(("id") hline (1) (2)))))))
+
+(ert-deftest ob-clutch-test-max-rows-nil-sends-the-sql-as-written ()
+  "`:max-rows nil' removes the limit, the query rewrite and the note."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2) (3)) sent
+      (should (equal (ob-clutch-test--run "select id from demo"
+                                          '(:max-rows . "nil"))
+                     '(("id") hline (1) (2) (3))))
+      (should (equal sent '("select id from demo"))))))
+
+(ert-deftest ob-clutch-test-max-rows-keeps-statements-that-are-not-selects ()
+  "Writes and a query's own row limit are sent unchanged.
+A limit of the query's own still cuts the rows Clutch returns."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2) (3)) sent
+      (ob-clutch-test--run "insert into demo values (1)" '(:max-rows . "2"))
+      (should (equal (ob-clutch-test--run "select id from demo limit 9"
+                                          '(:max-rows . "2"))
+                     '(("id") hline (1) (2) hline
+                       ("First 2 rows shown, more follow"))))
+      (should (equal (reverse sent)
+                     '("insert into demo values (1)"
+                       "select id from demo limit 9"))))))
+
+(ert-deftest ob-clutch-test-max-rows-defaults-to-a-finite-limit ()
+  "Without a header or an option, a large result is cut at 1000 rows."
+  (let (sent)
+    (ob-clutch-test--with-rows (mapcar #'list (number-sequence 1 1001)) sent
+      (let ((table (ob-clutch-test--run "select id from demo")))
+        (should (= (length table) (+ 2 1000 2)))
+        (should (equal (car (last table))
+                       '("First 1000 rows shown, more follow")))))))
+
+(ert-deftest ob-clutch-test-obsolete-max-rows-option-sets-the-default ()
+  "The obsolete option name still sets the default limit."
+  (let (sent)
+    (ob-clutch-test--with-rows '((1) (2)) sent
+      (with-suppressed-warnings ((obsolete org-babel-clutch-max-rows))
+        (let ((org-babel-clutch-max-rows 1))
+          (should (equal (ob-clutch-test--run "select id from demo")
+                         '(("id") hline (1) hline
+                           ("First 1 rows shown, more follow")))))))))
 
 (ert-deftest ob-clutch-test-inline-jdbc-driver-class-reaches-connect ()
   "Babel's public executor passes the explicit JDBC driver to Clutch."

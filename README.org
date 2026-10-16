@@ -70,9 +70,14 @@ Backend-specific headers are passed through when relevant:
 
 Generic =:backend jdbc= blocks require an explicit =:driver-class=, for example =:url jdbc:h2:mem:demo :driver-class org.h2.Driver :user sa=. The corresponding driver jar must be installed in Clutch's JDBC runtime.
 
-=:max-rows= truncates data rows after the query returns.  The default is
-unlimited; customize =ob-clutch-max-rows= or set =:max-rows= per block.
-Use =:max-rows nil= to force unlimited output for a single block.
+=:max-rows= limits the data rows a block returns.  The default is 1000, set by
+=ob-clutch-max-rows=; a few tens of thousands of rows already make Emacs
+unresponsive while Org inserts the table.  For a =SELECT= without a row limit
+of its own, ob-clutch asks the server for one row more than the limit, so a
+large table is not fetched in full.  When more rows exist, the table ends with
+a line below a rule, =First N rows shown, more follow=; that line is part of the
+table, so use =:max-rows nil= or a larger limit when another block reads the
+result.  Use =:max-rows nil= to send the SQL as written and return every row.
 
 * Examples
 
