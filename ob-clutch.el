@@ -65,10 +65,12 @@
 (define-obsolete-variable-alias 'org-babel-clutch-max-rows
   'ob-clutch-max-rows "0.2.0")
 
-(defcustom ob-clutch-max-rows nil
+(defcustom ob-clutch-max-rows 1000
   "Default maximum number of data rows returned by `ob-clutch'.
 Nil means unlimited.  A source block can override this with the
-`:max-rows' header argument."
+`:max-rows' header argument.  Each row costs a fraction of a
+millisecond to insert into the Org buffer, so a few tens of thousands
+of rows already make Emacs unresponsive for seconds."
   :type '(choice (const :tag "Unlimited" nil)
                  (natnum :tag "Rows"))
   :group 'ob-clutch)
@@ -208,17 +210,13 @@ Nil means unlimited.  A source block can override this with the
      ((and (stringp value) (string= (downcase value) "nil")) nil)
      (t (ob-clutch--parse-natnum value :max-rows)))))
 
-(defun ob-clutch--truncate-rows (rows params)
-  "Return ROWS truncated according to Babel PARAMS.
-When truncation happens, emit a message describing the number of hidden rows."
-  (if-let* ((max-rows (ob-clutch--max-rows params)))
-      (if (> (length rows) max-rows)
-          (progn
-            (message "ob-clutch truncated result from %d to %d rows"
-                     (length rows) max-rows)
-            (cl-subseq rows 0 max-rows))
-        rows)
-    rows))
+(defun ob-clutch--limited-sql (conn sql max-rows)
+  "Return SQL for CONN limited to one row more than MAX-ROWS.
+The extra row shows that the result was cut.  SQL that does not select,
+or has a row limit of its own, and a nil MAX-ROWS leave SQL unchanged."
+  (if (and max-rows (clutch-db-sql-pageable-query-p sql))
+      (clutch-db-build-paged-sql conn sql 0 (1+ max-rows))
+    sql))
 
 (defun ob-clutch--inline-params (params backend)
   "Build inline connection params from Babel PARAMS for BACKEND."
@@ -298,10 +296,13 @@ DEFAULT-BACKEND is used by language-specific executors."
 (defun ob-clutch--execute (body params default-backend)
   "Execute BODY with Babel PARAMS using DEFAULT-BACKEND."
   (let* ((conn (ob-clutch--connect params default-backend))
-         (sql (org-babel-expand-body:generic body params))
+         (max-rows (ob-clutch--max-rows params))
+         (sql (ob-clutch--limited-sql
+               conn (org-babel-expand-body:generic body params) max-rows))
          (result (clutch-db-query conn sql))
          (columns (clutch-db-result-columns result))
-         (rows (ob-clutch--truncate-rows (clutch-db-result-rows result) params)))
+         (rows (clutch-db-result-rows result))
+         (cut (and max-rows (> (length rows) max-rows))))
     (if columns
         (let ((col-names (mapcar (lambda (c)
                                    (let ((name (plist-get c :name)))
@@ -309,8 +310,12 @@ DEFAULT-BACKEND is used by language-specific executors."
                                  columns))
               (data (mapcar (lambda (row)
                               (mapcar #'ob-clutch--format-value row))
-                            rows)))
-          (cons col-names (cons 'hline data)))
+                            (if cut (cl-subseq rows 0 max-rows) rows))))
+          (append (list col-names 'hline) data
+                  (when cut
+                    (list 'hline
+                          (list (format "First %d rows shown, more follow"
+                                        max-rows))))))
       (format "Affected rows: %s"
               (or (clutch-db-result-affected-rows result) 0)))))
 
