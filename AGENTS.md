@@ -24,4 +24,4 @@ emacs -batch -L . -L /path/to/clutch -l ert -l ob-clutch \
 
 - Record user-visible changes in `CHANGELOG.md` under `Unreleased` in the same change; pure test or internal cleanup needs no entry.
 - Only a release changes `;; Version:`, moves the `Unreleased` entries under the new version, and is tagged `vX.Y.Z`.
-- ob-clutch has not been released: it is not on MELPA and no version has been tagged.
+- ob-clutch 0.2.0 is the first tagged release; it is not on MELPA.
