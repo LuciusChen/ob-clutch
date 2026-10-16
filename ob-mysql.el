@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025-2026 Lucius Chen
 ;; Author: Lucius Chen <chenyh572@gmail.com>
 ;; Maintainer: Lucius Chen <chenyh572@gmail.com>
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Keywords: languages, data
 ;; URL: https://github.com/LuciusChen/ob-clutch
 ;; SPDX-License-Identifier: GPL-3.0-or-later
