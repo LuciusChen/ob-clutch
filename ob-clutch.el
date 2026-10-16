@@ -339,7 +339,8 @@ while a statement runs.")
   "Call FN with the bounds of JOB's placeholder row, in its block's buffer.
 Do nothing when the buffer is gone or the result no longer is that row,
 alone unless `:results' appends or prepends: an edited result, or a newer
-run of the block, is left as it is."
+run of the block, is left as it is.  An error from FN, as in a read-only
+buffer, is reported and does not stop the jobs behind this one."
   (when-let* ((buffer (marker-buffer (ob-clutch--job-marker job)))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
@@ -356,8 +357,9 @@ run of the block, is left as it is."
                                  (regexp-quote (ob-clutch--job-id job))))
                     (bounds (save-excursion
                               (goto-char start)
-                              (and (re-search-forward (concat "^" row "$") end t)
-                                   (cons (match-beginning 0) (match-end 0)))))
+                              (and (re-search-forward
+                                    (concat "^[ \t]*\\(" row "\\)$") end t)
+                                   (cons (match-beginning 1) (match-end 1)))))
                     ((or (cl-intersection '("append" "prepend")
                                           (ob-clutch--job-result-params job)
                                           :test #'equal)
@@ -365,7 +367,11 @@ run of the block, is left as it is."
                           (concat "\\`" row "\\'")
                           (string-trim
                            (buffer-substring-no-properties body end))))))
-          (funcall fn (car bounds) (cdr bounds)))))))
+          (condition-case err
+              (funcall fn (car bounds) (cdr bounds))
+            (error (message "ob-clutch: cannot show the result of %s: %s"
+                            (ob-clutch--job-id job)
+                            (error-message-string err)))))))))
 
 (defun ob-clutch--job-status (job)
   "Show in JOB's placeholder whether the job is running or queued."
@@ -382,7 +388,8 @@ run of the block, is left as it is."
   "Show VALUE as the result of JOB's block, in place of its placeholder."
   (ob-clutch--with-placeholder
    job (lambda (beg end)
-         (delete-region beg (min (point-max) (1+ end)))
+         (delete-region (progn (goto-char beg) (line-beginning-position))
+                        (min (point-max) (1+ end)))
          (goto-char (ob-clutch--job-marker job))
          (org-babel-insert-result value (ob-clutch--job-result-params job)
                                   (org-babel-get-src-block-info 'light)))))

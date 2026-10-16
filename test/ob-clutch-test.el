@@ -379,7 +379,7 @@ EXTRA is more header arguments."
 (defun ob-clutch-test--goto-block (n)
   "Move point to the start of the Nth source block."
   (goto-char (point-min))
-  (re-search-forward "^#\\+begin_src" nil nil n)
+  (re-search-forward "^ *#\\+begin_src" nil nil n)
   (beginning-of-line))
 
 (defun ob-clutch-test--results ()
@@ -552,6 +552,38 @@ EXTRA is more header arguments."
         (should (string-match-p "Cancelled" (buffer-string)))
         (should-not ob-clutch-test--interrupts)
         (should (= (length ob-clutch--jobs) 1))))))
+
+(ert-deftest ob-clutch-test-async-block-in-a-list-item-gets-its-result ()
+  "A block indented inside a list item has its placeholder replaced too."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org
+          "- item\n  #+begin_src mysql :host 127.0.0.1 :port 1 :user root :async yes :max-rows nil\n  select 1\n  #+end_src\n"
+        (ob-clutch-test--goto-block 1)
+        (org-babel-execute-src-block)
+        (should (string-match-p "^ +| Running ob-clutch-[0-9]+ |" (buffer-string)))
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should-not (string-match-p "Running" (buffer-string)))
+        (should (string-match-p "^ +| *id *|" (buffer-string)))
+        (should-not ob-clutch--jobs)))))
+
+(ert-deftest ob-clutch-test-async-failure-to-show-does-not-stall-the-queue ()
+  "A result that cannot be shown, as in a read-only buffer, still starts the next job."
+  (let (started)
+    (ob-clutch-test--with-async started
+      (ob-clutch-test--in-org (concat (ob-clutch-test--block "select 1") "\n"
+                                      (ob-clutch-test--block "select 2"))
+        (ob-clutch-test--goto-block 1)
+        (org-babel-execute-src-block)
+        (ob-clutch-test--goto-block 2)
+        (org-babel-execute-src-block)
+        (setq buffer-read-only t)
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((1))) nil)
+        (should (equal (mapcar #'cadr started) '("select 2" "select 1")))
+        (setq buffer-read-only nil)
+        (funcall (nth 2 (car started)) (ob-clutch-test--ok '((2))) nil)
+        (should (string-match-p "| *2 *|" (buffer-string)))
+        (should-not ob-clutch--jobs)))))
 
 (ert-deftest ob-clutch-test-async-result-for-a-killed-buffer-is-ignored ()
   "Finishing a statement whose buffer is gone does nothing and moves on."
