@@ -4,7 +4,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
 
 * Installation
 
-=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.5.2 or later:
+=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.7.2 or later:
 
 #+begin_src emacs-lisp
 (use-package clutch)

@@ -2,6 +2,12 @@
 
 Notable user-visible changes are recorded here.
 
+## Unreleased
+
+### Fixed
+
+- Closing a block's connection, when Emacs exits or when a dead cached connection is replaced, also stops the SSH or TRAMP forward Clutch opened for it. A replaced connection's forward used to stay open until Emacs exited. Requires Clutch 0.7.2.
+
 ## 0.2.0 - 2026-10-16
 
 ### Added

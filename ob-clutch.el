@@ -4,7 +4,7 @@
 ;; Author: Lucius Chen <chenyh572@gmail.com>
 ;; Maintainer: Lucius Chen <chenyh572@gmail.com>
 ;; Version: 0.2.0
-;; Package-Requires: ((emacs "29.1") (clutch "0.5.2"))
+;; Package-Requires: ((emacs "29.1") (clutch "0.7.2"))
 ;; Keywords: languages, data
 ;; URL: https://github.com/LuciusChen/ob-clutch
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -280,6 +280,9 @@ DEFAULT-BACKEND is used by language-specific executors."
          (cached (gethash key ob-clutch--connection-cache)))
     (if (and cached (clutch-db-live-p cached))
         cached
+      ;; A dead connection may still hold an SSH or TRAMP forward.
+      (when cached
+        (clutch-close-connection cached))
       (let* ((prepared-params
               (if sqlite-p conn-params
                 (clutch-prepare-connection-params conn-params default-directory)))
@@ -497,7 +500,7 @@ interrupted and its block shows the outcome when the server answers."
   "Disconnect all cached ob-clutch connections and clear the cache."
   (maphash (lambda (_key conn)
              (condition-case nil
-                 (clutch-db-disconnect conn)
+                 (clutch-close-connection conn)
                (error nil)))
            ob-clutch--connection-cache)
   (clrhash ob-clutch--connection-cache))

@@ -178,6 +178,33 @@
         (should (equal c1 c2))
         (should (= created 1))))))
 
+(ert-deftest ob-clutch-test-connect-closes-dead-cached-connection ()
+  "A dead cached connection is closed, releasing its transport, before
+a new one replaces it, and the cache closes its connections the same way."
+  (let ((clutch-connection-alist nil)
+        (ob-clutch--connection-cache (make-hash-table :test 'equal))
+        (created 0)
+        closed)
+    (cl-letf (((symbol-function 'clutch-prepare-connection-params)
+               (lambda (params _source-default-directory) params))
+              ((symbol-function 'clutch-open-connection)
+               (lambda (_params)
+                 (cl-incf created)
+                 (list :conn-id created)))
+              ((symbol-function 'clutch-db-live-p)
+               (lambda (conn) (not (equal conn '(:conn-id 1)))))
+              ((symbol-function 'clutch-close-connection)
+               (lambda (conn) (push conn closed))))
+      (let* ((params '((:host . "127.0.0.1") (:user . "u")))
+             (dead (ob-clutch--connect params 'mysql))
+             (fresh (ob-clutch--connect params 'mysql)))
+        (should (equal dead '(:conn-id 1)))
+        (should (equal fresh '(:conn-id 2)))
+        (should (equal closed '((:conn-id 1))))
+        (ob-clutch--disconnect-all)
+        (should (equal closed '((:conn-id 2) (:conn-id 1))))
+        (should (zerop (hash-table-count ob-clutch--connection-cache)))))))
+
 (ert-deftest ob-clutch-test-generic-execute-accepts-connection-without-backend ()
   "Generic clutch Babel blocks should accept :connection without inline :backend."
   (let ((clutch-connection-alist
