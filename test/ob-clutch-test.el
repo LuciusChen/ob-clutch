@@ -138,20 +138,19 @@
 
 (ert-deftest ob-clutch-test-resolve-connection-preserves-transport-params ()
   "Saved and inline connection params should keep Clutch transport keys."
-  (let ((clutch-connection-alist
-         '(("remote" . (:backend pg :host "127.0.0.1" :port 5432
-                        :user "postgres" :database "app"
-                        :tramp "/ssh:arch:/work/")))))
-    (let ((saved (ob-clutch--resolve-connection '((:connection . "remote")) 'pg))
-          (inline (ob-clutch--resolve-connection
-                   '((:host . "db.internal")
-                     (:port . "5432")
-                     (:user . "postgres")
-                     (:database . "app")
-                     (:ssh-host . "bastion"))
-                   'pg)))
-      (should (equal (plist-get saved :tramp) "/ssh:arch:/work/"))
-      (should (equal (plist-get inline :ssh-host) "bastion")))))
+  (let* ((clutch-connection-alist
+          '(("remote" . (:backend pg :tramp-default-directory "/ssh:arch:/work/"))))
+         (saved (ob-clutch--resolve-connection '((:connection . "remote")) 'pg))
+         (headers '((:user . "postgres") (:database . "app"))))
+    (should (equal (plist-get saved :tramp-default-directory) "/ssh:arch:/work/"))
+    (dolist (transport '((:ssh-host . "bastion") (:tramp-default-directory . "/ssh:arch:/work/")))
+      (let ((inline (ob-clutch--resolve-connection (cons transport headers) 'pg)))
+        (should (equal (plist-get inline (car transport)) (cdr transport)))))
+    (should-not (assq 'tramp org-babel-header-args:clutch))
+    (should-error (clutch-prepare-connection-params
+                   (ob-clutch--resolve-connection
+                    (cons '(:tramp . "/ssh:arch:/work/") headers) 'pg))
+                  :type 'user-error)))
 
 (ert-deftest ob-clutch-test-resolve-connection-inline-sqlite-requires-database ()
   "Test sqlite inline params require :database."
