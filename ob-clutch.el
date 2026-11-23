@@ -42,7 +42,7 @@
 ;;   :connection                name from `clutch-connection-alist'
 ;;   :backend                   mysql|pg|postgresql|sqlite|oracle|sqlserver|...
 ;;   :host :port :user :password :database
-;;   :ssh-host :tramp
+;;   :ssh-host :tramp-default-directory
 ;;   :max-rows                  most data rows returned (default 1000)
 ;;   :async                     yes to run without blocking Emacs
 ;;
@@ -99,7 +99,6 @@ of rows already make Emacs unresponsive for seconds."
     (database . :any)
     (pass-entry . :any)
     (ssh-host . :any)
-    (tramp . :any)
     (tramp-default-directory . :any)
     (url . :any)
     (driver-class . :any)
@@ -123,7 +122,7 @@ of rows already make Emacs unresponsive for seconds."
 
 (defconst ob-clutch--transport-inline-param-keys
   '(:ssh-host :tramp :tramp-default-directory)
-  "Transport keys accepted by inline Org-Babel connection params.")
+  "Transport keys forwarded to Clutch so it can also reject obsolete `:tramp'.")
 
 (defconst ob-clutch--mysql-inline-param-keys
   '(:host :port :user :password :database :tls :ssl-mode

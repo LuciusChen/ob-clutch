@@ -2,6 +2,10 @@
 
 Notable user-visible changes are recorded here.
 
+## Unreleased
+
+- Header completion for `clutch` blocks offers `:tramp-default-directory` for TRAMP forwarding.
+
 ## 0.2.1 - 2026-11-02
 
 ### Fixed
