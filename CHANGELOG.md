@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here.
 
 ## Unreleased
 
+- Negative or fractional numeric headers such as `:max-rows` now report the invalid argument before executing the block.
+
 - Header completion for `clutch` blocks offers `:tramp-default-directory` for TRAMP forwarding.
 
 ## 0.2.1 - 2026-11-02

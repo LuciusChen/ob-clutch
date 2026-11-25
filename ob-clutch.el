@@ -155,7 +155,7 @@ of rows already make Emacs unresponsive for seconds."
 (defun ob-clutch--parse-natnum (value key)
   "Return VALUE parsed as a natural number for header KEY."
   (cond
-   ((numberp value) value)
+   ((natnump value) value)
    ((and (stringp value)
          (string-match-p "\\`[0-9]+\\'" value))
     (string-to-number value))
@@ -468,8 +468,8 @@ interrupted and its block shows the outcome when the server answers."
 
 (defun ob-clutch--execute (body params default-backend)
   "Execute BODY with Babel PARAMS using DEFAULT-BACKEND."
-  (let* ((conn (ob-clutch--connect params default-backend))
-         (max-rows (ob-clutch--max-rows params))
+  (let* ((max-rows (ob-clutch--max-rows params))
+         (conn (ob-clutch--connect params default-backend))
          (sql (ob-clutch--limited-sql
                conn (org-babel-expand-body:generic body params) max-rows)))
     (if (ob-clutch--parse-boolean (cdr (assq :async params)) :async)

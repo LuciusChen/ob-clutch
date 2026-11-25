@@ -295,7 +295,13 @@ Each SQL string sent to the connection is pushed onto the variable SENT."
   "A limited select fetches one row past the limit instead of every row."
   (let (sent)
     (ob-clutch-test--with-rows '((1) (2)) sent
-      (ob-clutch-test--run "select id from demo" '(:max-rows . "2"))
+      (dolist (value '("-1" "1.5"))
+        (should-error
+         (apply #'ob-clutch-test--run "select id from demo"
+                (org-babel-parse-header-arguments (concat ":max-rows " value)))
+         :type 'user-error))
+      (apply #'ob-clutch-test--run "select id from demo"
+             (org-babel-parse-header-arguments ":max-rows 2"))
       (should (equal sent '("select id from demo LIMIT 3 OFFSET 0"))))))
 
 (ert-deftest ob-clutch-test-max-rows-marks-a-cut-result ()
