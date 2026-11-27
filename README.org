@@ -4,7 +4,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
 
 * Installation
 
-=ob-clutch= requires Emacs 29.1 or later and depends on the =clutch= package, version 0.7.2 or later:
+Requires Emacs 29.1+ and =clutch= 0.7.2+:
 
 #+begin_src emacs-lisp
 (use-package clutch)
@@ -12,9 +12,7 @@ Org-Babel integration for the [[https://github.com/LuciusChen/clutch][clutch]] d
   :after clutch)
 #+end_src
 
-Native MySQL and PostgreSQL additionally require the optional =mysql= and =pgsql= protocol packages. Clutch loads each package when that backend connects; SQLite uses Emacs's built-in SQLite support.
-
-Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s JDBC bridge as well:
+Native MySQL and PostgreSQL blocks also require the optional =mysql= and =pgsql= packages, which Clutch loads on connect. SQLite uses Emacs's built-in support. Generic JDBC blocks require Clutch's JDBC adapter:
 
 #+begin_src emacs-lisp
 (require 'clutch-db-jdbc)
@@ -25,61 +23,38 @@ Generic JDBC blocks require [[https://github.com/LuciusChen/clutch][clutch]]'s J
 - =mysql=
 - =postgresql=
 - =sqlite=
-- =clutch= (generic entry point)
-
-Generic =clutch= blocks can target JDBC backends such as Oracle or SQL Server
-with a =:backend= header argument.
+- =clutch= (generic entry point; use =:backend= to target JDBC databases like Oracle or SQL Server)
 
 * Saved connections and passwords
 
-=:connection= resolves entries from =clutch-connection-alist= through Clutch's public saved-connection API. A saved =:backend= wins over the block language; without it, language-specific blocks use their backend and generic =clutch= blocks use =mysql=. Inline and saved backend names use Clutch's alias registry.
+=:connection= looks up entries in =clutch-connection-alist=. A saved =:backend= takes precedence over the block language; otherwise language-specific blocks use their own backend and generic =clutch= blocks default to =mysql=.
 
-Password resolution follows clutch's connection rules:
+Password lookup follows Clutch's normal order:
 
-1. =:password=
-2. A saved =:profile-entry= supplies its profile secret unless an explicit =:password= or =:pass-entry= overrides it.
+1. Explicit =:password=
+2. Saved =:profile-entry= (unless overridden by =:password= or =:pass-entry=)
 3. =:pass-entry= via =auth-source-pass=
-4. =auth-source-search= via =:host= / =:user= / =:port=
+4. =auth-source-search= by =:host= / =:user= / =:port=
 
-When a saved connection has no =:password=, =:pass-entry=, or =:profile-entry=, Clutch defaults =:pass-entry= to the connection name so pass entries like =mysql/dev= can still match =dev=. Babel does not inject a second password source beside a profile or modify the saved entry.
-
-When a block runs in a TRAMP Org buffer without an explicit transport, Clutch applies =clutch-tramp-context-policy= before connecting.
+If a saved connection specifies none of =:password=, =:pass-entry=, or =:profile-entry=, Clutch falls back to using the connection name as =:pass-entry= (so pass entries like =mysql/dev= match =dev=). In a TRAMP Org buffer without an explicit transport header, Clutch applies =clutch-tramp-context-policy= before connecting.
 
 * Header arguments
 
-- =:connection=
-- =:backend=
-- =:host=
-- =:port=
-- =:user=
-- =:password=
-- =:database=
-- =:pass-entry=
-- =:ssh-host=
-- =:tramp-default-directory=
-- =:max-rows=
-- =:async=
+Common headers: =:connection=, =:backend=, =:host=, =:port=, =:user=, =:password=, =:database=, =:pass-entry=, =:ssh-host=, =:tramp-default-directory=, =:connect-timeout=, =:read-idle-timeout=, =:max-rows=, =:async=.
 
-Backend-specific headers are passed through when relevant:
+Backend-specific headers:
 
 - PostgreSQL: =:schema=, =:tls=, =:sslmode=, =:query-timeout=
 - MySQL: =:tls=, =:ssl-mode=
-- JDBC: =:url=, =:driver-class=, =:sid=, =:catalog=, =:manual-commit=, =:rpc-timeout=
+- JDBC: =:url=, =:driver-class=, =:sid=, =:schema=, =:catalog=, =:manual-commit=, =:query-timeout=, =:rpc-timeout=
 
-Generic =:backend jdbc= blocks require an explicit =:driver-class=, for example =:url jdbc:h2:mem:demo :driver-class org.h2.Driver :user sa=. The corresponding driver jar must be installed in Clutch's JDBC runtime.
+Generic =:backend jdbc= blocks need an explicit =:driver-class= (for example =:url jdbc:h2:mem:demo :driver-class org.h2.Driver :user sa=) and the matching driver jar installed in Clutch's JDBC runtime.
 
-=:max-rows= limits the data rows a block returns.  The default is 1000, set by
-=ob-clutch-max-rows=; a few tens of thousands of rows already make Emacs
-unresponsive while Org inserts the table.  For a =SELECT= without a row limit
-of its own, ob-clutch asks the server for one row more than the limit, so a
-large table is not fetched in full.  When more rows exist, the table ends with
-a line below a rule, =First N rows shown, more follow=; that line is part of the
-table, so use =:max-rows nil= or a larger limit when another block reads the
-result.  Use =:max-rows nil= to send the SQL as written and return every row.
+=:max-rows= caps how many rows a block inserts into the Org buffer (default 1000 via =ob-clutch-max-rows=, since tens of thousands of table rows will stall Org). For a =SELECT= without its own row limit, =ob-clutch= asks for one extra row to detect truncation without fetching the whole table. When truncated, the table ends with a rule and =First N rows shown, more follow=; pass =:max-rows nil= (or a higher number) if another block reads the table or you want every row.
 
 * Asynchronous blocks
 
-=:async yes= runs the statement without blocking Emacs, on native MySQL and PostgreSQL and on JDBC connections:
+Add =:async yes= to run a block without blocking Emacs on native MySQL, PostgreSQL, or JDBC connections (synchronous backends like SQLite still run immediately):
 
 #+begin_src org
 ,#+begin_src postgresql :connection prod :async yes
@@ -87,9 +62,9 @@ SELECT pg_sleep(30), count(*) FROM orders;
 ,#+end_src
 #+end_src
 
-The block shows =Running ob-clutch-N= under =#+RESULTS:= and gets its table, or =Error: ...=, when the statement ends.  A connection refuses other work while a statement runs, so blocks that use the same connection wait for each other and run one after another, shown as =Queued ob-clutch-N=; blocks on different connections run together.  Running a block again while its earlier run is unfinished does not cancel the earlier statement, but only the latest run writes the result.  A result you edited or deleted meanwhile is left alone: the block's result must still be just the =Running= or =Queued= row, or with =:results append= or =:results prepend= contain it.  Backends that cannot run SQL without blocking Emacs, such as SQLite, run the block at once and return its result as usual.
+While running, =#+RESULTS:= shows =Running ob-clutch-N= and is replaced with the result table (or =Error: ...=) when done. Blocks sharing the same connection queue one after another (=Queued ob-clutch-N=); blocks on different connections run concurrently. Re-running a block does not cancel its earlier run, though only the latest run writes back, and a result you manually edited or deleted in the meantime is left untouched (also works with =:results append= and =:results prepend=).
 
-=M-x ob-clutch-cancel-block-at-point= cancels the latest run of the block at point, the one its result shows.  A queued block is dropped and shows =Cancelled=.  A running statement is interrupted, and the block shows the server's answer: the cancellation error, or the result if the statement had already finished.  A synchronous block on a connection that an asynchronous one is using fails with the connection's busy error; make it asynchronous too, so that it queues.
+Use =M-x ob-clutch-cancel-block-at-point= to cancel the latest run of the block at point: queued runs are dropped (=Cancelled=), while running statements are interrupted on the server and show the cancellation error (or the result if the query had already finished). A synchronous block targeting a connection busy with an async block fails with a busy error; add =:async yes= to queue it instead.
 
 * Examples
 
@@ -109,9 +84,7 @@ SELECT now();
 ,#+end_src
 #+end_src
 
-SQLite:
-
-Clutch resolves relative SQLite filenames against the block's local directory. Blocks that resolve to the same file share a cached connection. Blocks using =:memory:= also reuse their connection.
+SQLite (relative paths resolve against the Org file's directory; matching paths and =:memory:= share cached connections):
 
 #+begin_src org
 ,#+begin_src sqlite :database /tmp/demo.db
@@ -119,7 +92,7 @@ SELECT sqlite_version();
 ,#+end_src
 #+end_src
 
-Generic clutch/JDBC:
+Saved JDBC connection:
 
 #+begin_src org
 ,#+begin_src clutch :backend oracle :connection prod-oracle
@@ -127,7 +100,7 @@ SELECT sysdate FROM dual
 ,#+end_src
 #+end_src
 
-Inline JDBC:
+Inline JDBC connection:
 
 #+begin_src org
 ,#+begin_src clutch :backend oracle :host db.example.com :port 1521 :user scott :sid ORCL
